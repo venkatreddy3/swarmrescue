@@ -257,7 +257,7 @@ Every numeric flag is range-checked. For example, `--agents 0`, `--particles 999
 **Optional settings.** Copy [`.env.example`](.env.example) to `.env` to change `SWARM_SEED` (the
 default seeds) or `LOG_LEVEL`. No secrets are needed anywhere; see [SECURITY.md](SECURITY.md).
 
-**Tests** (0 tests, about 40 s; coverage: `pytest --cov=swarmrescue` = 96.8%)
+**Tests** (260 tests, about 40 s; coverage: `pytest --cov=swarmrescue` = 96.8%)
 
 ```bash
 python -m pytest
@@ -588,7 +588,7 @@ swarmrescue/
 │   └── vercel.json      # security headers + hash-pinned CSP
 ├── docs/                # screenshots (web-demo.png, dashboard-map.png)
 ├── scripts/ablation.py  # pings / evaporation ablation study
-├── tests/               # 0 tests: world, agent, simulation, optimizer, advisor, evaporation,
+├── tests/               # 260 tests: world, agent, simulation, optimizer, advisor, evaporation,
 │                        #   pings, security, CLI, Streamlit AppTest, web page (+ headless JS run)
 ├── main.py              # CLI
 ├── app.py               # Streamlit Rescue Mission Control
