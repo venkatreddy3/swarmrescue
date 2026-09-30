@@ -143,7 +143,10 @@ def test_deterministic_with_same_seed(round_no: int) -> None:
     """Identical config and seed reproduce identical missions."""
     a = simulate(SwarmConfig(seed=9), round_no)
     b = simulate(SwarmConfig(seed=9), round_no)
-    assert a.summary() | {"max_latency_ms": 0} == b.summary() | {"max_latency_ms": 0}
+    timing = {"max_latency_ms", "max_reroute_ms"}  # wall-clock measurements naturally vary
+    assert {k: v for k, v in a.summary().items() if k not in timing} == {
+        k: v for k, v in b.summary().items() if k not in timing
+    }
     assert np.array_equal(a.visited_mask, b.visited_mask)
     assert a.final_positions == b.final_positions
     c = simulate(SwarmConfig(seed=10), round_no)

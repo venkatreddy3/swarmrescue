@@ -98,6 +98,12 @@ def build_parser(settings: Settings | None = None) -> argparse.ArgumentParser:
     p.add_argument("--wall-density", type=bounded_float(0.0, 0.45), default=0.18, help="debris density (0-0.45)")
     p.add_argument("--max-ticks", type=bounded_int(1, 5000), default=300)
     p.add_argument("--priority", choices=PRIORITIES, default="balanced", help="operator goal for the advisor")
+    add_feature_args(p)
+    return p
+
+
+def add_feature_args(p: argparse.ArgumentParser) -> None:
+    """Adaptive-feature and safety flags (all bounded)."""
     p.add_argument("--evaporation", action="store_true", help="enable pheromone evaporation (trails fade)")
     p.add_argument(
         "--evaporation-rate",
@@ -110,7 +116,6 @@ def build_parser(settings: Settings | None = None) -> argparse.ArgumentParser:
     p.add_argument(
         "--safety-margin", type=bounded_int(0, 3), default=0, help="minimum robot clearance to keep when possible (0-3)"
     )
-    return p
 
 
 def config_from_args(args: argparse.Namespace) -> SwarmConfig:
