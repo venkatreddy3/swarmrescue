@@ -241,6 +241,11 @@ def feature_toggles() -> dict[str, Any]:
             "Evaporation rate per tick", 0.0, 0.2, step=0.005, key="evaporation_rate",
             disabled=not use_evaporation, help="Fraction of pheromone lost every tick.",
         )  # fmt: skip
+        learning = st.checkbox(
+            "Online learning",
+            value=True,
+            help="Each robot learns which weights search the most new cells per move.",
+        )
         margin = st.slider(
             "Safety margin (cells)", 0, 3, 0, help="Clearance robots keep from each other when possible; 0 = off."
         )
@@ -249,6 +254,7 @@ def feature_toggles() -> dict[str, Any]:
         "ping_range": int(ping_range),
         "use_evaporation": bool(use_evaporation),
         "safety_margin": int(margin),
+        "use_learning": bool(learning),
     }
 
 

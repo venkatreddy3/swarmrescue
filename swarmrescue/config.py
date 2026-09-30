@@ -46,6 +46,10 @@ class SwarmConfig:
         latency_budget_ms: Real-time budget for one tick of swarm decisions.
         safety_margin: Minimum Manhattan clearance a robot keeps from other
             robots when it can (0 = only never share a cell).
+        use_learning: Decentralized online learning: each robot runs its own
+            epsilon-greedy bandit over behaviour-weight presets.
+        learning_epsilon: Exploration probability of each robot's bandit.
+        learning_window: Ticks per reward window (new cells per move).
     """
 
     grid_size: int = 20
@@ -68,6 +72,9 @@ class SwarmConfig:
     ping_range: int = 4
     latency_budget_ms: float = 50.0
     safety_margin: int = 0
+    use_learning: bool = True
+    learning_epsilon: float = 0.1
+    learning_window: int = 10
 
     def __post_init__(self) -> None:
         """Validate every field, raising ``ValueError`` on bad values."""
@@ -96,13 +103,15 @@ INT_BOUNDS: dict[str, tuple[int, int]] = {
     "seed": (0, 2**32 - 1),
     "ping_range": (1, 10),
     "safety_margin": (0, 3),
+    "learning_window": (1, 200),
 }
 FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
     "wall_density": (0.0, 0.45),
     "latency_budget_ms": (1.0, 1000.0),
+    "learning_epsilon": (0.0, 1.0),
     **TUNABLE_BOUNDS,
 }
-BOOL_FIELDS: tuple[str, ...] = ("use_evaporation", "use_pings")
+BOOL_FIELDS: tuple[str, ...] = ("use_evaporation", "use_pings", "use_learning")
 
 
 def _require(condition: bool, message: str) -> None:

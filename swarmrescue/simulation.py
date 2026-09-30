@@ -21,6 +21,7 @@ import numpy as np
 from swarmrescue.agent import MODE_BLOCKED, MODE_IDLE, Robot
 from swarmrescue.config import SwarmConfig
 from swarmrescue.coordination import RadioLink, perceive_teammates
+from swarmrescue.learning import AdaptiveWeightLearner, weight_presets
 from swarmrescue.telemetry import NO_NEIGHBOUR, MissionTelemetry
 from swarmrescue.world import (
     DEBRIS,
@@ -288,6 +289,8 @@ class MissionControl:
         self.aftershock_rng = np.random.default_rng(shock_ss)
         n = cfg.grid_size
         self.robots = [Robot(i, cell, n, cfg.battery) for i, cell in enumerate(self.zone.entry_cells)]
+        if cfg.use_learning:
+            self._attach_learners()
         self.radio = RadioLink(cfg.comm_range)
         self.visited = np.zeros((n, n), dtype=bool)
         self.survivor_index = {s.cell: s.survivor_id for s in self.zone.survivors}
@@ -303,6 +306,13 @@ class MissionControl:
         self.interlock_trips = 0
         self.telemetry = MissionTelemetry(cfg.latency_budget_ms, cfg.safety_margin)
         self._record_search()
+
+    def _attach_learners(self) -> None:
+        """Decentralized online learning: one independent, seeded bandit per robot (no central learner)."""
+        presets = weight_presets(self.cfg.pheromone_weight, self.cfg.spread_weight)
+        for r in self.robots:
+            rng = np.random.default_rng([self.cfg.seed, r.robot_id, 7919])
+            r.learner = AdaptiveWeightLearner(presets, self.cfg.learning_epsilon, self.cfg.learning_window, rng)
 
     @property
     def latencies(self) -> list[float]:

@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from swarmrescue.config import SwarmConfig
+from swarmrescue.learning import AdaptiveWeightLearner
 from swarmrescue.world import DEBRIS, FREE, Cell, manhattan, neighbors4
 
 UNKNOWN: int = -1
@@ -217,6 +218,7 @@ class Robot:
         self._route: list[Cell] = []
         self._route_version: int = -1
         self.last_surprises: int = 0
+        self.learner: AdaptiveWeightLearner | None = None  # online learning (optional)
 
     @property
     def active(self) -> bool:
@@ -416,9 +418,10 @@ class Robot:
             return MODE_BLOCKED, None
         opts = np.asarray(ctx.options)
         cfg = ctx.cfg
+        pheromone_w, spread_w = self.behaviour_weights(cfg)
         scores = (
-            cfg.pheromone_weight * self.trail.intensity[opts[:, 0], opts[:, 1]]
-            + cfg.spread_weight * crowding_many(ctx.options, ctx.others)
+            pheromone_w * self.trail.intensity[opts[:, 0], opts[:, 1]]
+            + spread_w * crowding_many(ctx.options, ctx.others)
             + cfg.randomness * ctx.rng.random(len(ctx.options))
         )
         return MODE_PHEROMONE, ctx.options[int(np.argmin(scores))]
@@ -440,12 +443,22 @@ class Robot:
         step = self._reroute(passable & self.trail.stale_mask(), ctx.blocked, passable)
         return None if step is None else (MODE_PATROL, step)
 
+    def behaviour_weights(self, cfg: SwarmConfig) -> tuple[float, float]:
+        """``(pheromone_weight, spread_weight)``: the online learner's current preset, else the config."""
+        return self.learner.weights if self.learner is not None else (cfg.pheromone_weight, cfg.spread_weight)
+
+    def _learn(self, move: Cell | None) -> None:
+        """Online learning reward: did this tick's move search a new cell (energy efficiency)?"""
+        if self.learner is not None and self.active:
+            self.learner.observe(moved=move is not None, new_cell=move is not None and not self.trail.is_visited(move))
+
     def commit(self, move: Cell | None) -> None:
         """Apply the outcome of this tick's decision.
 
         Args:
             move: Cell moved into, or ``None`` if the robot stayed put.
         """
+        self._learn(move)
         if move is None:
             if self.mode == MODE_BLOCKED:
                 self.stuck_ticks += 1

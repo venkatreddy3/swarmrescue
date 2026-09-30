@@ -112,6 +112,7 @@ def add_feature_args(p: argparse.ArgumentParser) -> None:
         help="pheromone fraction lost per tick (0-0.2)",
     )
     p.add_argument("--no-pings", action="store_true", help="disable survivor acoustic pings")
+    p.add_argument("--no-learning", action="store_true", help="disable decentralized online learning")
     p.add_argument("--ping-range", type=bounded_int(1, 10), default=4, help="distance at which robots hear survivors")
     p.add_argument(
         "--safety-margin", type=bounded_int(0, 3), default=0, help="minimum robot clearance to keep when possible (0-3)"
@@ -132,6 +133,7 @@ def config_from_args(args: argparse.Namespace) -> SwarmConfig:
         use_pings=not args.no_pings,
         ping_range=args.ping_range,
         safety_margin=args.safety_margin,
+        use_learning=not args.no_learning,
     )
 
 
