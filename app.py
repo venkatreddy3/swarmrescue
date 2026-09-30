@@ -9,10 +9,69 @@ Okabe-Ito colour, explained in a text legend, and summarised in plain text.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import importlib
 import logging
 import math
+import sys
 import time
+from pathlib import Path
 from typing import Any, Mapping, MutableMapping
+
+ROOT = Path(__file__).resolve().parent
+PACKAGE = "swarmrescue"
+IMPORT_TIME_ATTR = "__imported_at__"
+
+
+def _package_modules(package: str) -> dict[str, Any]:
+    """Currently imported modules that belong to ``package``."""
+    return {n: m for n, m in sys.modules.items() if n == package or n.startswith(package + ".")}
+
+
+def _is_stale(modules: Mapping[str, Any], package: str, package_dir: Path) -> bool:
+    """True if any module is from outside ``package_dir`` or older than its source file."""
+    imported_at = getattr(modules.get(package), IMPORT_TIME_ATTR, None)
+    if not isinstance(imported_at, float):
+        return True  # a copy from before this safeguard existed
+    for module in modules.values():
+        file = getattr(module, "__file__", None)
+        if not file or package_dir not in Path(file).resolve().parents:
+            return True
+        if Path(file).exists() and Path(file).stat().st_mtime > imported_at:
+            return True
+    return False
+
+
+def ensure_fresh_package(root: Path = ROOT, package: str = PACKAGE) -> list[str]:
+    """Make ``import swarmrescue`` load the repository's *current* code.
+
+    Streamlit Cloud keeps one Python process alive across ``git pull`` updates
+    and re-runs ``app.py``, but it does not always reload helper modules that
+    were already imported. The new ``app.py`` then meets an old
+    ``swarmrescue`` (``TypeError: unexpected keyword argument`` or
+    ``ImportError: cannot import name``). This function:
+
+    1. puts ``root`` first on ``sys.path`` so the local package always wins;
+    2. drops the imported ``package`` modules if any is stale: loaded from
+       another location, from a copy without an import timestamp, or with a
+       source file modified after the package was imported.
+
+    Returns:
+        Names of the modules that were purged (empty when everything is fresh).
+    """
+    root_str = str(root)
+    if not sys.path or sys.path[0] != root_str:
+        sys.path[:] = [root_str] + [p for p in sys.path if p != root_str]
+    loaded = _package_modules(package)
+    if not loaded or not _is_stale(loaded, package, (root / package).resolve()):
+        return []
+    for name in loaded:
+        del sys.modules[name]
+    importlib.invalidate_caches()
+    return sorted(loaded)
+
+
+PURGED_MODULES = ensure_fresh_package()
 
 import matplotlib
 
@@ -33,6 +92,11 @@ from swarmrescue.optimizer import PSOResult, run_pso  # noqa: E402
 from swarmrescue.settings import SEED_BOUNDS, load_settings  # noqa: E402
 from swarmrescue.simulation import REASON_COMPLETE, Frame, SimulationResult, simulate  # noqa: E402
 
+CODE_VERSION = hashlib.sha256(
+    repr(sorted((n, getattr(m, "__file__", "")) for n, m in _package_modules(PACKAGE).items())).encode()
+    + repr(getattr(sys.modules[PACKAGE], IMPORT_TIME_ATTR, 0.0)).encode()
+).hexdigest()[:12]
+
 # Okabe-Ito colour-blind-safe palette.
 C_UNEXPLORED = "#F2F2F2"
 C_EXPLORED = "#56B4E9"   # sky blue
@@ -48,15 +112,15 @@ logger = logging.getLogger("swarmrescue.app")
 WEIGHT_DEFAULTS = {"pheromone_weight": 1.0, "spread_weight": 0.5, "randomness": 0.1, "evaporation_rate": 0.01}
 
 
-@st.cache_data(show_spinner=False)
-def run_mission(cfg_dict: dict[str, Any], round_no: int) -> SimulationResult:
-    """Simulate one mission (cached on the configuration)."""
+@st.cache_data(show_spinner=False, max_entries=64)
+def run_mission(cfg_dict: dict[str, Any], round_no: int, code_version: str = "") -> SimulationResult:
+    """Simulate one mission (cached on the configuration and the simulator's code version)."""
     return simulate(SwarmConfig(**cfg_dict), round_no=round_no, record_frames=True)
 
 
-@st.cache_data(show_spinner=False)
-def tune(cfg_dict: dict[str, Any], round_no: int, particles: int, iters: int) -> PSOResult:
-    """Run PSO over seeds 1, 2, 3 (cached on the inputs)."""
+@st.cache_data(show_spinner=False, max_entries=16)
+def tune(cfg_dict: dict[str, Any], round_no: int, particles: int, iters: int, code_version: str = "") -> PSOResult:
+    """Run PSO over seeds 1, 2, 3 (cached on the inputs and the simulator's code version)."""
     return run_pso(SwarmConfig(**cfg_dict), round_no, (1, 2, 3), particles, iters)
 
 
@@ -292,6 +356,10 @@ def sidebar() -> tuple[dict[str, Any], list[str], int, str]:
 def main() -> None:
     """Render the dashboard."""
     st.set_page_config(page_title="Rescue Mission Control", layout="wide")
+    if PURGED_MODULES:
+        logger.warning("Reloaded stale simulator modules: %s", PURGED_MODULES)
+        st.cache_data.clear()
+        st.session_state.pop("pso", None)
     st.title("SwarmRescue - Rescue Mission Control")
     st.caption(
         "Decentralized ant-pheromone robot swarm searching a collapsed building. "
@@ -312,7 +380,7 @@ def main() -> None:
         return
 
     with st.spinner("Robots exploring..."):
-        result = run_mission(cfg_dict, round_no)
+        result = run_mission(cfg_dict, round_no, CODE_VERSION)
 
     left, right = st.columns([3, 2])
     with left:
@@ -332,7 +400,7 @@ def main() -> None:
     c3.write("Fitness is averaged over maps 1, 2 and 3 with the current mission settings.")
     if st.button("Tune weights with PSO"):
         with st.spinner("Particles searching the weight space..."):
-            st.session_state["pso"] = tune(cfg_dict, round_no, particles, iters)
+            st.session_state["pso"] = tune(cfg_dict, round_no, particles, iters, CODE_VERSION)
     pso: PSOResult | None = st.session_state.get("pso")
     if pso is not None:
         hist = pd.DataFrame(

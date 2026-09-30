@@ -1,3 +1,7 @@
+# Runtime dependencies for the Streamlit dashboard and CLI (exact pins).
+# The swarmrescue package is imported from this repository folder; it is
+# deliberately NOT installed here (no "." / "-e ."), so a deploy can never run
+# a stale installed copy. Dev/CI tools live in requirements-dev.txt.
 numpy==2.4.4
 matplotlib==3.11.2
 pandas==3.0.2
