@@ -19,7 +19,7 @@ turns the results into plain-English advice for the human operator.
 |---|---|---|
 | **Primary demo (loads instantly)** | **Vercel: https://swarmrescue-web.vercel.app/** | [`web/index.html`](web/index.html) is a single 26 KB page with a live JavaScript port of the swarm, an **Aftershock** button, live metrics and the real results table. It makes no network requests. |
 | Full Mission Control dashboard | **Streamlit: https://swarmrescue.streamlit.app/** | [`app.py`](app.py) runs the Python simulator with PSO tuning and the Mission Advisor. It may take a while to wake up on a free tier, which is why the Vercel page is the primary demo. |
-| Demo video | *Coming soon* | |
+| Demo video | **[Watch the demo video (Google Drive)](https://drive.google.com/drive/folders/163nfZIjv_LMQjkQQFXBVvoaKClOD8FxX?usp=drive_link)** | |
 | Source | https://github.com/venkatreddy3/swarmrescue | |
 
 **Deploying the Vercel page:** import the repository into Vercel, set **Root Directory = `web`** and
@@ -171,6 +171,20 @@ It only recommends them if held-out fitness does not drop (`main.generalizes`).
 
 ---
 
+## Innovation
+
+Each idea is behind a config flag, has its own tests, and is backed by measured evidence.
+
+| Idea | What it does | Measured evidence |
+|---|---|---|
+| **Pheromone trail with evaporation** (`agent.py::PheromoneTrail`) | Robots leave a digital pheromone trail of the cells they have searched. Trails are shared over the short-range radio, and optionally fade (`evaporation_rate`) so that stale areas are re-patrolled. | Evaporation alone is neutral (Round 2: 117.63 → 117.80 on 20 zones). With PSO tuning the rate, it gives the best Round 2 result on unseen maps: **121.03**, against 116.50 for Attempt 1. |
+| **Acoustic survivor pings** (`MissionControl.heard_pings`, `Robot.home_in_on_ping`) | Trapped survivors emit a ping that robots within `ping_range` can hear. Robots plan a route to the ping optimistically through unknown rubble. | Time to first survivor falls from **16.5 to 11.3 ticks**. Time until every survivor is found falls from **103 to 66 ticks** (Round 1) and **158 to 97 ticks** (Round 2), and Round 2 survivors found rise from 96% to 99% (20 zones). |
+| **Decentralized online learning** (`learning.py::AdaptiveWeightLearner`) | Each robot runs its own epsilon-greedy bandit over four behaviour-weight presets. It rewards each preset by the new cells searched per move over 10-tick windows. There is no central learner. | On seeds 1–3, fitness rises in Round 1 from **126.997 to 127.321** and in Round 2 from **117.093 to 117.401**. Energy falls **5%** (567 → 539 and 807 → 764 moves), and new cells per move rise from 0.586 to 0.615 (Round 1) and from 0.364 to 0.391 (Round 2). Collisions stay at 0. |
+| **PSO with an over-fitting guard** (`optimizer.py::PSOOptimizer`, `main.py::generalizes`) | PSO tunes the weights on seeds 1–3. The guard then re-tests them on 10 unseen maps and rejects any tuning that loses fitness there. | Round 2 tuning looked like a gain (116.94 → 123.02 on the tuning seeds) but lost on unseen maps (120.26 → 118.21), so the guard kept the default weights. |
+| **Live in-browser JavaScript swarm** (`web/index.html`) | A 26 KB page with no network requests runs the swarm live, with an Aftershock button and a report of the real reason each mission ended. | A headless Node test runs the page's own JavaScript on 16 maps with **0 collisions**. |
+
+---
+
 ## Architecture
 
 ```mermaid
@@ -206,6 +220,25 @@ flowchart LR
     MC --> CLI
     MC --> ST
 ```
+
+### Architecture note: SDG 7, Affordable & Clean Energy (Target 7.3: double the rate of energy-efficiency improvement)
+
+Every robot runs on a fixed **battery budget**: 250 moves per robot, 1,000 for the default swarm.
+The architecture treats energy as a first-class output:
+
+- **Energy per searched cell.** `SimulationResult.energy_moves` divided by `visited_cells` is
+  reported for every mission, and the fitness charges 0.01 per move. Online learning lowers it from
+  1.71 to 1.63 moves per cell (Round 1) and from 2.75 to 2.56 (Round 2), on seeds 1–3.
+- **Wasted moves avoided by design:**
+  - robots go idle when nothing is left to search;
+  - the route cache reuses shortest routes;
+  - pheromone trails steer robots away from searched cells;
+  - each robot's online learner favours the behaviour that finds the most new cells per move.
+- **Acoustic pings** spend the same battery but reach every survivor 36–39% sooner. The energy
+  goes to reaching people instead of to blind search.
+- **Battery awareness in Mission Control.** End-of-mission messages report "robot batteries
+  depleted" when the budget, not the search, ended the mission, and the Mission Advisor then
+  recommends a larger battery.
 
 ## End-to-End Flow
 
@@ -445,6 +478,11 @@ wrongly typed values raise `ValueError`.
 | `evaporation_rate` | 0.01 | 0–0.2 | Pheromone fraction lost per tick (PSO-tuned when on) |
 | `use_pings` | True | bool | Survivor acoustic pings on/off |
 | `ping_range` | 4 | 1–10 | Distance at which a robot hears a survivor |
+| `safety_margin` | 0 | 0–3 | Robot clearance kept when possible (0 = only never share a cell) |
+| `latency_budget_ms` | 50.0 | 1–1000 | Real-time budget per tick; overruns are counted and logged |
+| `use_learning` | True | bool | Decentralized online learning (per-robot bandit) |
+| `learning_epsilon` | 0.1 | 0–1 | Exploration rate of each robot's bandit |
+| `learning_window` | 10 | 1–200 | Ticks per learning reward window |
 | `seed` | 0 | ≥ 0 | Master seed (zone, survivors, noise, aftershock) |
 
 Environment settings (`.env`, optional): `SWARM_SEED` (0–10000, default 1) and `LOG_LEVEL`
@@ -473,6 +511,32 @@ Environment settings (`.env`, optional): `SWARM_SEED` (0–10000, default 1) and
   RNG, so its maps differ from the Python seeds.
 - **Security and privacy.** Everything runs locally and offline, with no API keys; see
   [SECURITY.md](SECURITY.md).
+
+---
+
+## Limitations & Future Work
+
+**Limitations**
+
+- The building is a 4-connected grid. Sensing is perfect within the sensor window, and the radio has
+  no packet loss while it works.
+- Survivors don't move, and a ping gives their exact cell.
+- PSO tunes on only 3 seeds and over-fits (the guard catches this, but the tuning gain is lost).
+- The online-learning gains are small (about +0.3 fitness) and were measured on seeds 1–3 only.
+  The four presets are a fixed, hand-chosen set.
+- The JavaScript port doesn't include evaporation or online learning, and its random numbers differ
+  from the Python seeds.
+- Nothing has been validated on real robots yet. The Streamlit free tier can cold-start slowly,
+  which is why the Vercel page is the primary demo.
+
+**Future work**
+
+- Noisy sensors and radios, multi-hop mesh relays, and moving survivors.
+- Validation in ROS 2 and Gazebo, then on real hardware.
+- A contextual bandit (for example, conditioning on battery level or radio status) instead of fixed
+  presets.
+- PSO fitness averaged over 20 or more maps, with cross-validation.
+- Energy-aware frontier yielding, which was promising in prototypes.
 
 ---
 
@@ -567,6 +631,30 @@ property tests and CI, sped up the hot paths, and traced every spec line to code
 6. **The advisor contradicted PSO** in Round 2, so the "revisiting cells" rule became round-aware.
 7. **Dashboard readability.** Two-column metrics and integer axes.
 8. **Test fix.** One hand-computed fitness assertion was wrong (97.0, not 92.0).
+
+---
+
+## Glossary
+
+| Term | Where it lives in the code |
+|---|---|
+| Disaster zone, debris, survivor | `world.py::DisasterZone`, `world.py::Debris`, `world.py::Survivor` |
+| Aftershock | `world.py::Aftershock`, `simulation.py::MissionControl.trigger_aftershock` |
+| Pheromone trail | `agent.py::PheromoneTrail` (deposit, merge, evaporate) |
+| Route cache | `agent.py::Robot._cached_step` |
+| Recalibrate route / trajectory | `agent.py::Robot.recalibrate_route`, `agent.py::Robot._reroute` (BFS) |
+| Deadlock breaker | `agent.py::Robot._break_deadlock` |
+| Acoustic ping | `simulation.py::MissionControl.heard_pings`, `agent.py::Robot.home_in_on_ping` |
+| Short-range radio | `coordination.py::RadioLink` |
+| Single point of failure | No central controller: `agent.py::Robot.choose_move`, failure injected in `MissionControl.trigger_aftershock` |
+| Collision-free | `simulation.py::MissionControl._move_robots`, `simulation.py::count_collisions` |
+| Real-time budget | `config.py::SwarmConfig.latency_budget_ms`, `telemetry.py::MissionTelemetry.record_tick` |
+| Coverage speed | `simulation.py::SimulationResult.coverage_speed`, speed term of `compute_fitness` |
+| Energy efficiency, path length | `SimulationResult.energy_moves`, `SimulationResult.mean_path_length`, reward in `learning.py` |
+| Online learning | `learning.py::AdaptiveWeightLearner` |
+| Over-fitting guard, unseen maps | `main.py::generalizes`, `main.py::held_out_check` (seeds 101–110) |
+| Mission Control | `simulation.py::MissionControl`, `app.py` (Rescue Mission Control dashboard) |
+| Mission Advisor | `advisor.py::MissionAdvisor` |
 
 ---
 

@@ -30,6 +30,7 @@ from the README (`Results`, `Performance`, `Innovation`).
 | Path length | `swarmrescue/simulation.py::SimulationResult` (`mean_path_length`), `swarmrescue/agent.py::bfs_path` (shortest routes) | `tests/test_alignment.py::test_mean_path_length_is_energy_per_robot`, `tests/test_properties.py::test_bfs_path_length_equals_true_shortest_distance` | BFS matches an independent Bellman-Ford on every generated grid |
 | Resilience to agent failure | `swarmrescue/agent.py::Robot.fail`, `swarmrescue/coordination.py::perceive_teammates` (failed robot = obstacle), `swarmrescue/simulation.py::post_aftershock_reachable` | `tests/test_agent.py::test_perception_includes_failed_robots_as_obstacles`, `tests/test_simulation.py::test_replanning_after_shift_keeps_exploring` | Round 2 coverage 98% after losing robot 0 |
 | Resilience to communication dropout | `swarmrescue/coordination.py::RadioLink.cut`, `swarmrescue/coordination.py::RadioLink.perception_radius` (falls back to 2-cell proximity sensing) | `tests/test_agent.py::test_radio_link_cut_stops_sharing` | Round 2 runs its whole second half without radio |
+| Online learning (agents that learn) | `swarmrescue/learning.py::AdaptiveWeightLearner`, `swarmrescue/simulation.py::MissionControl._attach_learners` (one learner per robot) | `tests/test_learning.py::test_greedy_learner_tries_every_preset_then_exploits_the_best`, `tests/test_learning.py::test_each_robot_learns_independently` | Round 1 fitness 126.997 → 127.321, Round 2 117.093 → 117.401, energy −5% (seeds 1–3) |
 
 ## 3. Evaluation
 

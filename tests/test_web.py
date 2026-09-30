@@ -15,6 +15,7 @@ from scripts.update_csp import csp_hash, inline_block
 WEB = Path(__file__).resolve().parents[1] / "web"
 VERCEL_URL = "https://swarmrescue-web.vercel.app/"
 STREAMLIT_URL = "https://swarmrescue.streamlit.app/"
+VIDEO_URL = "https://drive.google.com/drive/folders/163nfZIjv_LMQjkQQFXBVvoaKClOD8FxX?usp=drive_link"
 HTML = (WEB / "index.html").read_text(encoding="utf-8")
 SCRIPT = inline_block(HTML, "script")
 STYLE = inline_block(HTML, "style")
@@ -68,7 +69,9 @@ def test_page_is_tiny_and_self_contained() -> None:
     for forbidden in ("fetch(", "XMLHttpRequest", "WebSocket", "localStorage", "document.cookie", "import("):
         assert forbidden not in SCRIPT, forbidden
     external = re.findall(r"(?:src|href)=\"(https?://[^\"]+)\"", HTML)
-    assert all(url.startswith(("https://github.com/venkatreddy3/swarmrescue", STREAMLIT_URL)) for url in external)
+    assert all(
+        url.startswith(("https://github.com/venkatreddy3/swarmrescue", STREAMLIT_URL, VIDEO_URL)) for url in external
+    )
     assert not re.findall(r"src=\"https?://", HTML)  # links only; nothing is loaded from elsewhere
 
 
@@ -113,7 +116,8 @@ def test_page_shows_real_results_and_links() -> None:
 def test_readme_has_real_demo_links() -> None:
     """README lists the deployed Vercel and Streamlit URLs and no leftover placeholders."""
     readme = (WEB.parent / "README.md").read_text(encoding="utf-8")
-    assert VERCEL_URL in readme and STREAMLIT_URL in readme
+    assert VERCEL_URL in readme and STREAMLIT_URL in readme and VIDEO_URL in readme
+    assert VIDEO_URL in HTML
     assert "YOUR-" not in readme and "replace with the deployed URL" not in readme
 
 
