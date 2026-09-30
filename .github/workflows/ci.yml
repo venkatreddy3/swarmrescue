@@ -1,0 +1,56 @@
+name: CI
+
+# Runs on every push to main (and on demand). It never creates branches,
+# pull requests or releases, and it only needs read access to the repository.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, types, tests, security
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pinned dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format
+        run: ruff format --check .
+
+      - name: Mypy (strict)
+        run: mypy
+
+      - name: Pytest with coverage (fails under 90%)
+        run: pytest --cov=swarmrescue --cov-report=term-missing --cov-report=xml
+
+      - name: Bandit (static security analysis)
+        run: bandit -c pyproject.toml -r swarmrescue app.py main.py scripts
+
+      - name: pip-audit (known vulnerabilities in pinned dependencies)
+        run: pip-audit -r requirements.txt -r requirements-dev.txt

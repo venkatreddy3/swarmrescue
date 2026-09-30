@@ -33,3 +33,9 @@ results/
 
 # Local tool config
 .claude/
+
+# Hypothesis example database / coverage outputs
+.hypothesis/
+.coverage
+coverage.xml
+htmlcov/
