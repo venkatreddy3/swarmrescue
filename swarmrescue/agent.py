@@ -80,10 +80,17 @@ class PheromoneTrail:
         """True if ``cell`` has been searched according to this trail."""
         return bool(self.visited[cell])
 
-    def merge(self, other: PheromoneTrail) -> None:
-        """Combine with a teammate's trail (element-wise maximum)."""
+    def merge(self, other: PheromoneTrail) -> bool:
+        """Combine with a teammate's trail (element-wise maximum).
+
+        Returns:
+            True if the set of searched cells grew (routes planned on the old
+            trail may no longer lead to an unsearched cell).
+        """
         np.maximum(self.intensity, other.intensity, out=self.intensity)
+        grew = bool((other.visited & ~self.visited).any())
         self.visited |= other.visited
+        return grew
 
     def copy(self) -> PheromoneTrail:
         """Independent deep copy (used for order-independent radio merges)."""
@@ -162,6 +169,15 @@ def crowding(cell: Cell, others: Iterable[Cell]) -> float:
     return float(sum(1.0 / (1.0 + manhattan(cell, o)) for o in others))
 
 
+def crowding_many(cells: Sequence[Cell], others: Sequence[Cell]) -> np.ndarray:
+    """Vectorised :func:`crowding` for several candidate cells at once (O(C x R) in NumPy)."""
+    if not others:
+        return np.zeros(len(cells))
+    dist = np.abs(np.asarray(cells)[:, None, :] - np.asarray(others)[None, :, :]).sum(axis=2)
+    result: np.ndarray = (1.0 / (1.0 + dist)).sum(axis=1)
+    return result
+
+
 class Robot:
     """A decentralized search-and-rescue robot.
 
@@ -175,6 +191,10 @@ class Robot:
         stuck_ticks: Consecutive ticks the robot wanted to move but could not.
         moves: Total moves made (energy used).
         mode: How the last decision was made (for telemetry and the dashboard).
+        belief_version: Bumped whenever ``known`` or the searched set changes;
+            a cached BFS route is reused only while the version is unchanged.
+        bfs_calls: BFS searches actually run (efficiency telemetry).
+        route_cache_hits: Moves served from a still-valid cached route.
     """
 
     def __init__(self, robot_id: int, start: Cell, grid_size: int, battery: int) -> None:
@@ -190,6 +210,11 @@ class Robot:
         self.stuck_ticks: int = 0
         self.moves: int = 0
         self.mode: str = MODE_IDLE
+        self.belief_version: int = 0
+        self.bfs_calls: int = 0
+        self.route_cache_hits: int = 0
+        self._route: list[Cell] = []
+        self._route_version: int = -1
 
     @property
     def active(self) -> bool:
@@ -222,8 +247,18 @@ class Robot:
         before = self.known[r0:r1, c0:c1]
         truth = grid[r0:r1, c0:c1]
         surprises = int(((before == FREE) & (truth == DEBRIS)).sum())
+        if not np.array_equal(before, truth):
+            self.belief_version += 1
         self.known[r0:r1, c0:c1] = truth
         return surprises
+
+    def absorb(self, trail: PheromoneTrail, known: np.ndarray) -> None:
+        """Merge a teammate's trail and debris map (received over the radio link)."""
+        grew = self.trail.merge(trail)
+        merged = np.maximum(self.known, known)
+        if grew or not np.array_equal(merged, self.known):
+            self.belief_version += 1
+            self.known = merged
 
     def score(self, cell: Cell, others: list[Cell], cfg: SwarmConfig, rng: np.random.Generator) -> float:
         """Ant-pheromone move score (lower is better).
@@ -237,12 +272,32 @@ class Robot:
         )
 
     def _reroute(self, goals: np.ndarray, blocked: set[Cell], passable: np.ndarray | None = None) -> Cell | None:
-        """First step of the shortest BFS route to the nearest goal, or None."""
+        """First step of the shortest BFS route to the nearest goal, or None (the route is cached)."""
         if not goals.any():
             return None
         grid = self.known == FREE if passable is None else passable
+        self.bfs_calls += 1
         path = bfs_path(grid, self.pos, goals, blocked)
+        self._route = [] if path is None else path[1:]
+        self._route_version = self.belief_version
         return None if path is None else path[1]
+
+    def _cached_step(self, goals: np.ndarray, blocked: set[Cell]) -> Cell | None:
+        """Next step of the cached route if it is still valid, else None.
+
+        Valid means: the robot's belief has not changed since planning (no new
+        debris, no merged trail), the route's goal is still a goal, and no
+        perceived teammate stands on the remaining route. Under these conditions
+        the rest of a shortest route is still a shortest route, so skipping BFS
+        is safe (sub-path optimality).
+        """
+        route = self._route
+        if not route or self._route_version != self.belief_version or not goals[route[-1]]:
+            return None
+        if any(cell in blocked for cell in route):
+            return None
+        self.route_cache_hits += 1
+        return route[0]
 
     def home_in_on_ping(self, pings: Sequence[Cell], blocked: set[Cell]) -> Cell | None:
         """First step toward the nearest heard survivor ping.
@@ -335,7 +390,13 @@ class Robot:
             return None
         if not ctx.options:
             return MODE_BLOCKED, None
-        scores = [self.score(nb, ctx.others, ctx.cfg, ctx.rng) for nb in ctx.options]
+        opts = np.asarray(ctx.options)
+        cfg = ctx.cfg
+        scores = (
+            cfg.pheromone_weight * self.trail.intensity[opts[:, 0], opts[:, 1]]
+            + cfg.spread_weight * crowding_many(ctx.options, ctx.others)
+            + cfg.randomness * ctx.rng.random(len(ctx.options))
+        )
         return MODE_PHEROMONE, ctx.options[int(np.argmin(scores))]
 
     def _reroute_to_frontier(self, ctx: MoveContext) -> Decision | None:
@@ -344,7 +405,7 @@ class Robot:
         frontier = passable & ~self.trail.visited
         if not frontier.any():
             return None
-        step = self._reroute(frontier, ctx.blocked, passable)
+        step = self._cached_step(frontier, ctx.blocked) or self._reroute(frontier, ctx.blocked, passable)
         return (MODE_BFS, step) if step is not None else (MODE_BLOCKED, None)  # blocked: a teammate is in the way
 
     def _patrol_stale_area(self, ctx: MoveContext) -> Decision | None:
@@ -367,6 +428,10 @@ class Robot:
             elif self.mode in (MODE_IDLE, MODE_OFF):
                 self.stuck_ticks = 0
             return
+        if self._route and self._route[0] == move:
+            self._route.pop(0)
+        else:
+            self._route = []
         self.pos = move
         self.battery -= 1
         self.moves += 1

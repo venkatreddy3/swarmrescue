@@ -347,8 +347,9 @@ class MissionControl:
     def _move_robots(self, occupied: set[Cell]) -> None:
         """Robots decide and move one after another (collision-free by construction)."""
         radius = self.radio.perception_radius
-        for r in self.robots:
-            blocked, others = perceive_teammates(r, self.robots, radius)
+        positions = np.asarray([r.pos for r in self.robots])
+        for i, r in enumerate(self.robots):
+            blocked, others = perceive_teammates(r, self.robots, radius, positions)
             pings = self.heard_pings(r)
             self.ping_detections += bool(pings)
             move = r.choose_move(self.cfg, blocked, others, self.robot_rng, pings)
@@ -360,6 +361,7 @@ class MissionControl:
                 occupied.discard(r.pos)
                 occupied.add(move)
             r.commit(move)
+            positions[i] = r.pos
 
     def snapshot(self, tick: int, coverage: float) -> Frame:
         """Build an immutable :class:`Frame` of the current state."""

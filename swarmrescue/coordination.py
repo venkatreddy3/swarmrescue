@@ -67,22 +67,22 @@ class RadioLink:
                 if manhattan(a.pos, b.pos) > self.comm_range:
                     continue
                 links += 1
-                trail_b, known_b = snapshot[b.robot_id]
-                trail_a, known_a = snapshot[a.robot_id]
-                a.trail.merge(trail_b)
-                np.maximum(a.known, known_b, out=a.known)
-                b.trail.merge(trail_a)
-                np.maximum(b.known, known_a, out=b.known)
+                a.absorb(*snapshot[b.robot_id])
+                b.absorb(*snapshot[a.robot_id])
         return links
 
 
-def perceive_teammates(robot: Robot, robots: list[Robot], radius: int) -> tuple[set[Cell], list[Cell]]:
+def perceive_teammates(
+    robot: Robot, robots: list[Robot], radius: int, positions: np.ndarray | None = None
+) -> tuple[set[Cell], list[Cell]]:
     """What ``robot`` can locally perceive about its teammates.
 
     Args:
         robot: The observing robot.
         robots: The whole swarm (only nearby members are returned).
         radius: Manhattan perception radius.
+        positions: Optional ``(R, 2)`` array of current robot positions, kept
+            up to date by the caller, so distances are one vectorised operation.
 
     Returns:
         ``(blocked, others)``. ``blocked`` holds the cells occupied by any
@@ -90,10 +90,13 @@ def perceive_teammates(robot: Robot, robots: list[Robot], radius: int) -> tuple[
         avoiding them keeps movement collision-free. ``others`` holds the
         positions of perceived *working* robots, used for the crowding term.
     """
+    pos = np.asarray([r.pos for r in robots]) if positions is None else positions
+    near = np.flatnonzero(np.abs(pos - np.asarray(robot.pos)).sum(axis=1) <= radius)
     blocked: set[Cell] = set()
     others: list[Cell] = []
-    for other in robots:
-        if other is robot or manhattan(robot.pos, other.pos) > radius:
+    for i in near:
+        other = robots[int(i)]
+        if other is robot:
             continue
         blocked.add(other.pos)
         if other.alive:
