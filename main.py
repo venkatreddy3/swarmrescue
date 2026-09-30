@@ -107,6 +107,9 @@ def build_parser(settings: Settings | None = None) -> argparse.ArgumentParser:
     )
     p.add_argument("--no-pings", action="store_true", help="disable survivor acoustic pings")
     p.add_argument("--ping-range", type=bounded_int(1, 10), default=4, help="distance at which robots hear survivors")
+    p.add_argument(
+        "--safety-margin", type=bounded_int(0, 3), default=0, help="minimum robot clearance to keep when possible (0-3)"
+    )
     return p
 
 
@@ -123,6 +126,7 @@ def config_from_args(args: argparse.Namespace) -> SwarmConfig:
         evaporation_rate=args.evaporation_rate,
         use_pings=not args.no_pings,
         ping_range=args.ping_range,
+        safety_margin=args.safety_margin,
     )
 
 
@@ -178,7 +182,19 @@ def print_table(title: str, results: Sequence[SimulationResult]) -> dict[str, fl
     print(mean_row(s))
     for r in results:
         print(f"  seed {r.seed}: {r.end_message}")
+    print(safety_line(results))
     return s
+
+
+def safety_line(results: Sequence[SimulationResult]) -> str:
+    """Hard-constraint evidence: separation, deadlocks, recalibration time, latency budget."""
+    return (
+        f"  safety & real-time: min robot separation {min(r.min_separation for r in results)}, "
+        f"deadlocks broken {sum(r.deadlocks_broken for r in results)}, "
+        f"max reroute {max(r.max_reroute_ms for r in results):.2f} ms, "
+        f"latency-budget violations {sum(r.latency_budget_violations for r in results)}, "
+        f"throughput {np.mean([r.throughput for r in results]):.2f} cells/tick"
+    )
 
 
 def print_banner(cfg: SwarmConfig, round_no: int) -> None:

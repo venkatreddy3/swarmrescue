@@ -168,6 +168,10 @@ def metric_items(result: SimulationResult) -> list[tuple[str, str]]:
         ("Debris found on known routes", str(result.wall_surprises)),
         ("Time to first survivor (ticks)", "none found" if first is None else str(first)),
         ("Ticks a robot heard a survivor ping", str(result.ping_detections)),
+        ("Minimum robot separation (cells)", str(result.min_separation)),
+        ("Deadlocks detected and broken", str(result.deadlocks_broken)),
+        ("Throughput (cells searched per tick)", f"{result.throughput:.2f}"),
+        ("Max reroute time after new debris", f"{result.max_reroute_ms:.2f} ms"),
     ]
 
 
@@ -237,7 +241,15 @@ def feature_toggles() -> dict[str, Any]:
             "Evaporation rate per tick", 0.0, 0.2, step=0.005, key="evaporation_rate",
             disabled=not use_evaporation, help="Fraction of pheromone lost every tick.",
         )  # fmt: skip
-    return {"use_pings": bool(use_pings), "ping_range": int(ping_range), "use_evaporation": bool(use_evaporation)}
+        margin = st.slider(
+            "Safety margin (cells)", 0, 3, 0, help="Clearance robots keep from each other when possible; 0 = off."
+        )
+    return {
+        "use_pings": bool(use_pings),
+        "ping_range": int(ping_range),
+        "use_evaporation": bool(use_evaporation),
+        "safety_margin": int(margin),
+    }
 
 
 def sidebar() -> tuple[dict[str, Any], list[str], int, str]:

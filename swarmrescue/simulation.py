@@ -14,12 +14,14 @@ import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
 from swarmrescue.agent import MODE_BLOCKED, MODE_IDLE, Robot
 from swarmrescue.config import SwarmConfig
 from swarmrescue.coordination import RadioLink, perceive_teammates
+from swarmrescue.telemetry import NO_NEIGHBOUR, MissionTelemetry
 from swarmrescue.world import (
     DEBRIS,
     FREE,
@@ -92,6 +94,24 @@ class SimulationResult:
     survivor_found_ticks: tuple[int | None, ...] = ()
     ping_detections: int = 0
     end_reason: str = ""
+    min_separation: int = NO_NEIGHBOUR
+    margin_violations: int = 0
+    deadlocks_broken: int = 0
+    blocked_ticks: int = 0
+    latency_budget_violations: int = 0
+    max_reroute_ms: float = 0.0
+    reroute_events: int = 0
+    mean_path_length: float = 0.0
+
+    @property
+    def throughput(self) -> float:
+        """Search throughput: reachable cells searched per tick."""
+        return self.visited_cells / max(1, self.ticks_run)
+
+    @property
+    def coverage_velocity(self) -> float:
+        """Coverage velocity: percentage points of the reachable area searched per tick."""
+        return 100.0 * self.coverage / max(1, self.ticks_run)
 
     @property
     def end_message(self) -> str:
@@ -127,6 +147,11 @@ class SimulationResult:
             "max_latency_ms": round(self.max_latency_ms, 3),
             "wall_surprises": self.wall_surprises,
             "first_survivor_tick": self.first_survivor_tick,
+            "throughput": round(self.throughput, 3),
+            "coverage_velocity": round(self.coverage_velocity, 3),
+            "min_separation": self.min_separation,
+            "deadlocks_broken": self.deadlocks_broken,
+            "max_reroute_ms": round(self.max_reroute_ms, 3),
         }
 
 
@@ -276,8 +301,13 @@ class MissionControl:
         self.collisions = 0
         self.wall_surprises = 0
         self.interlock_trips = 0
-        self.latencies: list[float] = []
+        self.telemetry = MissionTelemetry(cfg.latency_budget_ms, cfg.safety_margin)
         self._record_search()
+
+    @property
+    def latencies(self) -> list[float]:
+        """Per-tick decision latency in milliseconds."""
+        return self.telemetry.latencies
 
     def _record_search(self) -> None:
         """Mark robot cells as searched and rescue any survivor found there."""
@@ -332,7 +362,8 @@ class MissionControl:
         self._sense_and_share()
         previous = [r.pos for r in self.robots]
         self._move_robots(set(previous))
-        self.latencies.append((time.perf_counter() - start) * 1000.0)
+        self.telemetry.record_tick((time.perf_counter() - start) * 1000.0)
+        self.telemetry.record_positions([r.pos for r in self.robots])
         self.collisions += count_collisions(self.robots, self.zone.grid, previous)
         self._record_search()
 
@@ -352,7 +383,9 @@ class MissionControl:
             blocked, others = perceive_teammates(r, self.robots, radius, positions)
             pings = self.heard_pings(r)
             self.ping_detections += bool(pings)
+            began = time.perf_counter()
             move = r.choose_move(self.cfg, blocked, others, self.robot_rng, pings)
+            self.telemetry.record_decision(r.mode, (time.perf_counter() - began) * 1000.0, r.last_surprises > 0)
             if move is not None and (self.zone.grid[move] != FREE or move in occupied):
                 self.interlock_trips += 1  # hardware safety interlock (should never fire)
                 r.mode = MODE_BLOCKED
@@ -428,7 +461,22 @@ class MissionControl:
             survivor_found_ticks=tuple(self.found_ticks),
             ping_detections=self.ping_detections,
             end_reason=mission_end_reason(self.robots, p.complete, time_up, cfg.max_ticks),
+            **self._safety_metrics(energy),
         )
+
+    def _safety_metrics(self, energy: int) -> dict[str, Any]:
+        """Hard-constraint and objective metrics gathered by the telemetry recorder."""
+        t = self.telemetry
+        return {
+            "min_separation": t.min_separation,
+            "margin_violations": t.margin_violations,
+            "deadlocks_broken": t.deadlocks_broken,
+            "blocked_ticks": t.blocked_ticks,
+            "latency_budget_violations": t.budget_violations,
+            "max_reroute_ms": t.max_reroute_ms,
+            "reroute_events": len(t.reroute_ms),
+            "mean_path_length": energy / max(1, len(self.robots)),
+        }
 
 
 @dataclass

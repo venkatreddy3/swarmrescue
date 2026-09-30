@@ -44,6 +44,8 @@ class SwarmConfig:
         use_pings: Enable survivor acoustic pings (tapping / phone signals).
         ping_range: Manhattan distance at which a robot hears a survivor.
         latency_budget_ms: Real-time budget for one tick of swarm decisions.
+        safety_margin: Minimum Manhattan clearance a robot keeps from other
+            robots when it can (0 = only never share a cell).
     """
 
     grid_size: int = 20
@@ -65,6 +67,7 @@ class SwarmConfig:
     use_pings: bool = True
     ping_range: int = 4
     latency_budget_ms: float = 50.0
+    safety_margin: int = 0
 
     def __post_init__(self) -> None:
         """Validate every field, raising ``ValueError`` on bad values."""
@@ -92,6 +95,7 @@ INT_BOUNDS: dict[str, tuple[int, int]] = {
     "new_walls": (0, 2500),
     "seed": (0, 2**32 - 1),
     "ping_range": (1, 10),
+    "safety_margin": (0, 3),
 }
 FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
     "wall_density": (0.0, 0.45),

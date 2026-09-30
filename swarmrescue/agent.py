@@ -159,6 +159,7 @@ class MoveContext:
     pings: tuple[Cell, ...]
     free_nbs: list[Cell]
     options: list[Cell]
+    reachable: list[Cell]
 
 
 Decision = tuple[str, Cell | None]
@@ -215,6 +216,7 @@ class Robot:
         self.route_cache_hits: int = 0
         self._route: list[Cell] = []
         self._route_version: int = -1
+        self.last_surprises: int = 0
 
     @property
     def active(self) -> bool:
@@ -247,6 +249,7 @@ class Robot:
         before = self.known[r0:r1, c0:c1]
         truth = grid[r0:r1, c0:c1]
         surprises = int(((before == FREE) & (truth == DEBRIS)).sum())
+        self.last_surprises = surprises
         if not np.array_equal(before, truth):
             self.belief_version += 1
         self.known[r0:r1, c0:c1] = truth
@@ -349,14 +352,30 @@ class Robot:
             The neighbouring cell to move into, or ``None`` to stay put.
         """
         free_nbs = [nb for nb in neighbors4(self.pos, self.known.shape[0]) if self.known[nb] == FREE]
-        ctx = MoveContext(cfg, blocked, others, rng, tuple(pings), free_nbs, [n for n in free_nbs if n not in blocked])
+        reachable = [n for n in free_nbs if n not in blocked]
+        safe = [n for n in reachable if self._keeps_clearance(n, blocked, cfg.safety_margin)]
+        ctx = MoveContext(cfg, blocked, others, rng, tuple(pings), free_nbs, safe, reachable)
         for behaviour in self._behaviours():
             decision = behaviour(ctx)
             if decision is not None:
-                self.mode, move = decision
+                self.mode, move = self._enforce_margin(decision, ctx)
                 return move
         self.mode = MODE_IDLE  # nothing left to search in my belief: save energy
         return None
+
+    def _keeps_clearance(self, cell: Cell, robots: set[Cell], margin: int) -> bool:
+        """Safety margin: moving to ``cell`` keeps clearance > margin, or does not reduce it."""
+        if margin <= 0 or not robots:
+            return True
+        after = min(manhattan(cell, r) for r in robots)
+        return after > margin or after >= min(manhattan(self.pos, r) for r in robots)
+
+    def _enforce_margin(self, decision: Decision, ctx: MoveContext) -> Decision:
+        """Planned steps (ping, reroute, patrol) that would break the safety margin become a wait."""
+        mode, move = decision
+        if move is None or mode == MODE_DEADLOCK or move in ctx.options:
+            return decision
+        return MODE_BLOCKED, None
 
     def _behaviours(self) -> tuple[Callable[[MoveContext], Decision | None], ...]:
         """Behaviours in priority order (see :meth:`choose_move`)."""
@@ -374,10 +393,15 @@ class Robot:
         return None if self.active else (MODE_OFF, None)
 
     def _break_deadlock(self, ctx: MoveContext) -> Decision | None:
-        """After DEADLOCK_TICKS blocked ticks, take a random free neighbour."""
-        if self.stuck_ticks < DEADLOCK_TICKS or not ctx.options:
+        """Deadlock detection: after DEADLOCK_TICKS blocked ticks, take a random free neighbour.
+
+        The breaker may relax the safety margin (never the no-shared-cell rule) so
+        the swarm can never freeze.
+        """
+        choices = ctx.options or ctx.reachable
+        if self.stuck_ticks < DEADLOCK_TICKS or not choices:
             return None
-        return MODE_DEADLOCK, ctx.options[int(ctx.rng.integers(len(ctx.options)))]
+        return MODE_DEADLOCK, choices[int(ctx.rng.integers(len(choices)))]
 
     def _follow_ping(self, ctx: MoveContext) -> Decision | None:
         """Head for a survivor whose acoustic ping is heard."""
