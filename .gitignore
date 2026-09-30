@@ -29,3 +29,6 @@ Thumbs.db
 *.gif
 *.mp4
 results/
+
+# Local tool config
+.claude/
