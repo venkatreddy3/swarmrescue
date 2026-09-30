@@ -265,17 +265,7 @@ def advise(
     Raises:
         ValueError: If ``priority`` is unknown or ``results`` is empty.
     """
-    if priority not in PRIORITIES:
-        raise ValueError(f"priority must be one of {PRIORITIES}")
-    runs = [results] if isinstance(results, SimulationResult) else list(results)
-    if not runs:
-        raise ValueError("at least one result is required")
-    stats = MissionStats.from_runs(runs, cfg, priority, pso)
-    recs = [rec for rule in RULES for rec in rule(stats)]
-    if not any(r.severity in ("critical", "warning") for r in recs):
-        msg = f"{stats.coverage:.0%} coverage, {stats.survivors:.0%} of survivors found, zero collisions."
-        recs.append(Recommendation("success", "Mission on track", msg))
-    return sorted(recs, key=lambda r: SEVERITY_ORDER[r.severity])
+    return MissionAdvisor(priority).advise(results, cfg, pso)
 
 
 class MissionAdvisor:
@@ -301,5 +291,17 @@ class MissionAdvisor:
         cfg: SwarmConfig,
         pso: PSOResult | None = None,
     ) -> list[Recommendation]:
-        """Recommendations for these mission results (see :func:`advise`)."""
-        return advise(results, cfg, self.priority, pso)
+        """Recommendations for these mission results, most severe first (see :func:`advise`).
+
+        Raises:
+            ValueError: If ``results`` is empty.
+        """
+        runs = [results] if isinstance(results, SimulationResult) else list(results)
+        if not runs:
+            raise ValueError("at least one result is required")
+        stats = MissionStats.from_runs(runs, cfg, self.priority, pso)
+        recs = [rec for rule in RULES for rec in rule(stats)]
+        if not any(r.severity in ("critical", "warning") for r in recs):
+            msg = f"{stats.coverage:.0%} coverage, {stats.survivors:.0%} of survivors found, zero collisions."
+            recs.append(Recommendation("success", "Mission on track", msg))
+        return sorted(recs, key=lambda r: SEVERITY_ORDER[r.severity])

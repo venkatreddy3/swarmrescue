@@ -17,7 +17,7 @@ PROXIMITY_RANGE: int = 2
 
 
 class RadioLink:
-    """Peer-to-peer radio shared by the swarm.
+    """Short-range radio: peer-to-peer links between robots, no base station (no single point of failure).
 
     Attributes:
         comm_range: Manhattan radio range.

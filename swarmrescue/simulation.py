@@ -103,6 +103,14 @@ class SimulationResult:
     max_reroute_ms: float = 0.0
     reroute_events: int = 0
     mean_path_length: float = 0.0
+    ticks_budget: int = 300
+
+    @property
+    def coverage_speed(self) -> float:
+        """Coverage speed: 1 - tick_at_90 / ticks budget used by the fitness (0 if 90% never reached)."""
+        if self.tick_at_90 is None:
+            return 0.0
+        return max(0.0, 1.0 - self.tick_at_90 / max(1, self.ticks_budget))
 
     @property
     def throughput(self) -> float:
@@ -170,7 +178,9 @@ def compute_fitness(
     """Mission fitness (higher is better).
 
     ``100*coverage + 20*survivors_ratio + 20*speed - 0.01*energy - 100*collisions``
-    where ``speed = 1 - tick_at_90 / max_ticks`` (0 if 90% coverage was never reached).
+    where ``speed = 1 - tick_at_90 / max_ticks`` is the coverage speed term (0 if 90% coverage was
+    never reached), energy moves are the path length of all robots (energy efficiency term), and
+    collisions must stay zero (collision-free trajectories).
     """
     speed = 0.0 if tick_at_90 is None else 1.0 - tick_at_90 / max_ticks
     return 100.0 * coverage + 20.0 * survivors_ratio + 20.0 * speed - 0.01 * energy_moves - 100.0 * collisions
@@ -471,6 +481,7 @@ class MissionControl:
             survivor_found_ticks=tuple(self.found_ticks),
             ping_detections=self.ping_detections,
             end_reason=mission_end_reason(self.robots, p.complete, time_up, cfg.max_ticks),
+            ticks_budget=cfg.max_ticks,
             **self._safety_metrics(energy),
         )
 

@@ -120,6 +120,52 @@ class _Swarm:
         return IterationLog(iteration, self.gbest_fit, float(self.fit.mean()), _to_params(self.gbest, self.names))
 
 
+@dataclass(frozen=True)
+class PSOOptimizer:
+    """Global-best Particle Swarm Optimisation of the swarm's behaviour weights.
+
+    The optimiser itself is offline tuning; the over-fitting guard in ``main.py``
+    re-checks its result on unseen maps before the Mission Advisor recommends it.
+    """
+
+    n_particles: int = 8
+    n_iters: int = 12
+    inertia: float = 0.6
+    c1: float = 1.5
+    c2: float = 1.5
+    rng_seed: int = 0
+
+    def optimize(
+        self,
+        base_cfg: SwarmConfig,
+        round_no: int = 1,
+        seeds: Sequence[int] = (1, 2, 3),
+        callback: Callable[[IterationLog], None] | None = None,
+    ) -> PSOResult:
+        """Maximise mean fitness over ``seeds``; the best-fitness history never decreases."""
+        if self.n_particles < 1 or self.n_iters < 0 or not seeds:
+            raise ValueError("need n_particles >= 1, n_iters >= 0 and at least one seed")
+        rng = np.random.default_rng(self.rng_seed)
+        swarm = _Swarm(base_cfg, self.n_particles, rng)
+
+        def fitness(position: np.ndarray) -> float:
+            """Objective for one particle."""
+            return objective(position, base_cfg, seeds, round_no, swarm.names)
+
+        swarm.evaluate(fitness)
+        baseline = float(swarm.fit[0])
+        history = [swarm.log(0)]
+        for it in range(1, self.n_iters + 1):
+            if callback:
+                callback(history[-1])
+            swarm.move(rng, self.inertia, self.c1, self.c2)
+            swarm.evaluate(fitness)
+            history.append(swarm.log(it))
+        if callback:
+            callback(history[-1])
+        return PSOResult(_to_params(swarm.gbest, swarm.names), swarm.gbest_fit, baseline, tuple(history))
+
+
 def run_pso(
     base_cfg: SwarmConfig,
     round_no: int = 1,
@@ -157,24 +203,5 @@ def run_pso(
     Raises:
         ValueError: On invalid swarm settings.
     """
-    if n_particles < 1 or n_iters < 0 or not seeds:
-        raise ValueError("need n_particles >= 1, n_iters >= 0 and at least one seed")
-    rng = np.random.default_rng(rng_seed)
-    swarm = _Swarm(base_cfg, n_particles, rng)
-
-    def fitness(position: np.ndarray) -> float:
-        """Objective for one particle."""
-        return objective(position, base_cfg, seeds, round_no, swarm.names)
-
-    swarm.evaluate(fitness)
-    baseline = float(swarm.fit[0])
-    history = [swarm.log(0)]
-    for it in range(1, n_iters + 1):
-        if callback:
-            callback(history[-1])
-        swarm.move(rng, inertia, c1, c2)
-        swarm.evaluate(fitness)
-        history.append(swarm.log(it))
-    if callback:
-        callback(history[-1])
-    return PSOResult(_to_params(swarm.gbest, swarm.names), swarm.gbest_fit, baseline, tuple(history))
+    optimizer = PSOOptimizer(n_particles, n_iters, inertia, c1, c2, rng_seed)
+    return optimizer.optimize(base_cfg, round_no, seeds, callback)

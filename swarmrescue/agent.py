@@ -252,10 +252,21 @@ class Robot:
         truth = grid[r0:r1, c0:c1]
         surprises = int(((before == FREE) & (truth == DEBRIS)).sum())
         self.last_surprises = surprises
+        if surprises:
+            self.recalibrate_route()
         if not np.array_equal(before, truth):
             self.belief_version += 1
         self.known[r0:r1, c0:c1] = truth
         return surprises
+
+    def recalibrate_route(self) -> None:
+        """Recalibrate route: drop the cached trajectory so the next decision replans it with BFS.
+
+        Called the moment debris is sensed on a route the robot believed free;
+        replanning happens in the same tick, well inside the real-time budget.
+        """
+        self._route = []
+        self._route_version = -1
 
     def absorb(self, trail: PheromoneTrail, known: np.ndarray) -> None:
         """Merge a teammate's trail and debris map (received over the radio link)."""
@@ -288,7 +299,7 @@ class Robot:
         return None if path is None else path[1]
 
     def _cached_step(self, goals: np.ndarray, blocked: set[Cell]) -> Cell | None:
-        """Next step of the cached route if it is still valid, else None.
+        """Route cache: next step of the cached route (trajectory) if it is still valid, else None.
 
         Valid means: the robot's belief has not changed since planning (no new
         debris, no merged trail), the route's goal is still a goal, and no
@@ -395,7 +406,7 @@ class Robot:
         return None if self.active else (MODE_OFF, None)
 
     def _break_deadlock(self, ctx: MoveContext) -> Decision | None:
-        """Deadlock detection: after DEADLOCK_TICKS blocked ticks, take a random free neighbour.
+        """Deadlock breaker: after DEADLOCK_TICKS blocked ticks, take a random free neighbour.
 
         The breaker may relax the safety margin (never the no-shared-cell rule) so
         the swarm can never freeze.

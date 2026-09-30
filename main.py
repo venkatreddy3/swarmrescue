@@ -164,7 +164,7 @@ def summarize(results: Sequence[SimulationResult]) -> dict[str, float]:
 
 
 def generalizes(held_out_before: float, held_out_after: float) -> bool:
-    """Over-fitting guard: tuned weights must not lower fitness on unseen maps."""
+    """Over-fitting guard: tuned weights must not lower fitness on unseen maps (held-out seeds)."""
     return held_out_after >= held_out_before
 
 
