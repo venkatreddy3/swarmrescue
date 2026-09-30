@@ -263,14 +263,16 @@ Held-out seeds 101–110:
 
 On unseen buildings, tuning found every survivor and reached 90% coverage about 25 ticks sooner.
 
-Mission Advisor output for Round 2:
+Mission Advisor output of `python main.py --round 2` (default weights):
 
 ```
-[INFO] Robots are revisiting cells: About 2.6 moves per explored cell. Without radio, robots cannot share pheromone maps ...
-[INFO] Plan for failures: Round 2 lost a robot and the radio link. Keep a spare robot in reserve ...
-[INFO] Apply tuned weights: PSO improved mean fitness from 120.31 to 122.75. -> try pheromone_weight=0.522, spread_weight=0.984, randomness=0.394
-[SUCCESS] Mission on track: 99% coverage, 100% of survivors found, zero collisions.
+[INFO] Robots are revisiting cells: About 2.7 moves per explored cell. Without radio, robots cannot share pheromone maps and re-search each other's areas; restoring map sharing helps most.
+[INFO] Plan for failures: Round 2 lost a robot and the radio link. Keep a spare robot in reserve and consider dropping radio relays so robots can keep sharing maps.
+[SUCCESS] Mission on track: 98% coverage, 100% of survivors found, zero collisions.
 ```
+
+With `--tune`, the advisor reports on the tuned weights instead. That run shows 2.6 moves per explored
+cell and 99% coverage, and adds: `[INFO] Apply tuned weights: PSO improved mean fitness from 120.31 to 122.75.`
 
 **Takeaways**
 
