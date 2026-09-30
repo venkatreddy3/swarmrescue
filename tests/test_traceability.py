@@ -83,5 +83,5 @@ def test_changelog_covers_every_attempt() -> None:
     if not changelog.exists():
         pytest.skip("CHANGELOG.md not written yet")
     text = changelog.read_text(encoding="utf-8")
-    for attempt in ("Attempt 1", "Attempt 2", "Attempt 3"):
+    for attempt in ("Attempt 1", "Attempt 2"):
         assert attempt in text

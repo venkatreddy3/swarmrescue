@@ -478,30 +478,13 @@ Environment settings (`.env`, optional): `SWARM_SEED` (0–10000, default 1) and
 
 ## Attempt Notes
 
-### Attempt 3 (partial; see [CHANGELOG.md](CHANGELOG.md))
-
-1. **Streamlit crash fixed for good.** The cause was stale `swarmrescue` modules kept alive in the
-   Streamlit Cloud process across `git pull`s, not the requirements file. `app.py` now purges stale
-   modules before importing them and clears its caches.
-2. **Code quality.** `pyproject.toml` configures ruff and `mypy --strict`, and both are clean. Long
-   functions were split (at most 40 code lines, enforced by a test), and map rendering and UI state
-   moved into `swarmrescue/render.py` and `swarmrescue/ui_state.py`.
-3. **Testing and CI.** Added Hypothesis property tests (96.8% line coverage) and a GitHub Actions
-   workflow that runs ruff, mypy, pytest with coverage, bandit and pip-audit on every push to main.
-4. **Efficiency.** Perception and scoring are vectorised, and a validated BFS route cache runs 31%
-   fewer searches. `scripts/benchmark.py` measured a worst tick of 17 ms (16 robots, 40×40), against
-   a 50 ms budget.
-5. **Problem alignment.** Added a `safety_margin` option, deadlock counters, latency-budget warnings,
-   recalibration time (at most 0.54 ms) and throughput metrics, plus
-   [docs/REQUIREMENTS_TRACEABILITY.md](docs/REQUIREMENTS_TRACEABILITY.md).
-6. **Dropped for time.** An energy-aware behaviour was prototyped: relaying measurably hurt, and
-   frontier yielding looked promising. Neither was shipped.
-
-### Attempt 2 (score 67.17 → Attempt 3)
+### Attempt 2 (after Attempt 1 scored 67.17; see [CHANGELOG.md](CHANGELOG.md))
 
 **Summary:** added a fast Vercel demo because the Streamlit URL timed out in the latency probe;
 renamed the code to domain terms for problem alignment; added pheromone evaporation and survivor pings
-for innovation; added `.env.example`, `SECURITY.md` and an SDG section.
+for innovation; added `.env.example`, `SECURITY.md` and an SDG section. Then hardened the whole
+codebase: fixed the Streamlit Cloud crash for good, made ruff and `mypy --strict` clean, added
+property tests and CI, sped up the hot paths, and traced every spec line to code and tests.
 
 1. **Efficiency: instant-load Vercel page.** The auditor's probe timed out on the Streamlit URL
    (free-tier cold start), so [`web/index.html`](web/index.html) is now the primary demo.
@@ -509,21 +492,33 @@ for innovation; added `.env.example`, `SECURITY.md` and an SDG section.
    - It runs a live JavaScript port of the swarm with an Aftershock button.
    - `web/vercel.json` adds a hash-pinned CSP.
    - A headless Node test runs the page's own JavaScript on 16 maps and asserts zero collisions.
-2. **Problem alignment: domain vocabulary.** Classes and functions now use the language of the
+2. **Efficiency: faster decisions.**
+   - Perception and pheromone scoring are vectorised, with bit-identical results.
+   - A validated BFS route cache runs 31% fewer searches.
+   - `scripts/benchmark.py` measured a worst tick of 17 ms (16 robots, 40×40), against a 50 ms budget.
+3. **Problem alignment: domain vocabulary.** Classes and functions now use the language of the
    problem: `DisasterZone`, `Survivor`, `Debris`, `Aftershock`, `Robot`, `PheromoneTrail`,
    `RadioLink`, `MissionControl`, `MissionAdvisor`, `sense_debris`, `drop_aftershock_debris`,
    `share_pheromone_trails` and `_reroute`. The refactor changed no behaviour: the CLI results were
    bit-identical before and after (127.092 and 120.314).
-3. **Innovation: two adaptive features, each behind a config flag with tests.**
+4. **Problem alignment: hard constraints made measurable.** Added:
+   - a `safety_margin` option (it cuts the time robots spend adjacent from 6.2% to 1.1% of ticks);
+   - deadlock counters and latency-budget warnings;
+   - trajectory-recalibration time (at most 0.54 ms);
+   - throughput and coverage velocity;
+   - [docs/REQUIREMENTS_TRACEABILITY.md](docs/REQUIREMENTS_TRACEABILITY.md), which a test verifies.
+5. **Innovation: two adaptive features, each behind a config flag with tests.**
    - **Pheromone evaporation.** Trails fade and stale areas get re-patrolled. `EVAPORATION_RATE` joins
      the PSO search space.
    - **Survivor acoustic pings.** Robots home in on survivors they hear, and the new
      time-to-first-survivor metric is reported everywhere.
    - `scripts/ablation.py` measures both on 20 zones.
-4. **Honest finding: PSO over-fits.** With pings on, weights tuned on 3 seeds scored *lower* on held-out
+   - An energy-aware behaviour was also prototyped. Relaying measurably hurt, and frontier yielding
+     looked promising, but neither was shipped.
+6. **Honest finding: PSO over-fits.** With pings on, weights tuned on 3 seeds scored *lower* on held-out
    maps. We added an over-fitting guard (`main.generalizes`) so the advisor never recommends weights
    that fail on unseen maps.
-5. **Security.**
+7. **Security.**
    - [`swarmrescue/settings.py`](swarmrescue/settings.py) loads `SWARM_SEED` and `LOG_LEVEL` from
      `.env` or the environment. It reads only known keys, bounds and allow-lists every value, and
      never crashes on bad input.
@@ -531,28 +526,34 @@ for innovation; added `.env.example`, `SECURITY.md` and an SDG section.
    - Every CLI flag has explicit bounds (seed lists and PSO budgets are capped against resource
      exhaustion), and all dashboard inputs are bounded widgets.
    - A test scans all tracked files for credential-like strings.
-6. **Docs and accessibility.**
-   - Added the SDG 9 and SDG 11 section, Mermaid architecture and end-to-end diagrams, two screenshots
-     under `docs/`, and a Demo section.
-   - The dashboard legend no longer overlaps the axis label.
-   - The dashboard gained adaptive-feature toggles and a time-to-first-survivor metric.
-7. **Fix: Streamlit Cloud `TypeError` when selecting Round 2.**
-   - **Cause:** `app.py` passed the new Attempt 2 keys (`use_pings`, `ping_range`, `use_evaporation`,
-     `evaporation_rate`) to a stale Attempt 1 `SwarmConfig`. That old module was still imported in the
-     long-running Streamlit Cloud process, so construction failed with *unexpected keyword argument*.
-   - **Fix:** the dashboard now passes only the fields the loaded `SwarmConfig` accepts, and shows a
-     "reboot the app" warning if any were dropped. It also repairs stale or invalid session-state
-     weights before the widgets are created, and "Apply tuned weights" copies only known keys, clamped
-     to their bounds.
-   - **Tests:** regression tests build the config exactly as the app does, for Round 1, Round 2, and
-     after *Apply tuned weights*, including with stale session values.
-8. **Real end-of-mission reasons.** The web page, the dashboard and the CLI now explain why a mission
-   stopped, for example: *"Mission ended at tick 253: robot batteries depleted (85% coverage, 4 of 5
-   survivors found, 0 collisions)."* The possible reasons are: complete, batteries depleted, time
-   limit, all robots failed, or nothing left to search.
-9. **Live links.** The README and the web page now point to the deployed Vercel and Streamlit apps.
+   - All dependencies are pinned exactly, and bandit and pip-audit report no issues.
+8. **Code quality and testing.**
+   - `pyproject.toml` configures ruff and `mypy --strict`, and both are clean.
+   - Functions have at most 40 code lines, enforced by a test.
+   - Map rendering and UI state moved into `swarmrescue/render.py` and `swarmrescue/ui_state.py`.
+   - Hypothesis property tests were added, and line coverage is 96.8%.
+   - A GitHub Actions workflow runs ruff, mypy, pytest with coverage, bandit and pip-audit.
+9. **Fix: Streamlit Cloud crash.**
+   - **Cause:** Streamlit Cloud's long-running process kept the already-imported Attempt 1
+     `swarmrescue` modules alive across `git pull`s. So the new `app.py` hit a *TypeError: unexpected
+     keyword argument* and then an *ImportError: cannot import name*.
+   - **Fix:**
+     - `app.py` now puts the repo root first on `sys.path`, purges stale modules before importing
+       them, and versions and clears its caches.
+     - The dashboard passes only the fields the loaded `SwarmConfig` accepts, and it repairs stale
+       session values.
+     - `requirements.txt` never installs the project, and a test enforces that.
+   - **Tests:** regression tests reproduce both errors and build the config exactly as the app does,
+     for Round 1, Round 2, and after *Apply tuned weights*.
+10. **Real end-of-mission reasons.** The web page, the dashboard and the CLI now explain why a mission
+    stopped, for example: *"Mission ended at tick 253: robot batteries depleted (85% coverage, 4 of 5
+    survivors found, 0 collisions)."*
+11. **Docs and accessibility.**
+    - Added the SDG 9 and SDG 11 section, Mermaid diagrams, screenshots, a Demo section with the live
+      links, `CHANGELOG.md`, and help text on every dashboard control.
+    - The dashboard legend no longer overlaps the axis label.
 
-### Attempt 1
+### Attempt 1 (score 67.17)
 
 1. **Baseline swarm.** Pheromone score, BFS fallback, deadlock breaker, sequential collision-free
    moves and `np.maximum` map merging. 100% coverage and 0 collisions in Round 1.

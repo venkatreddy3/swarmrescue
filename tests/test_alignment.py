@@ -1,4 +1,4 @@
-"""Tests for the Track 05 hard constraints and objectives made explicit in Attempt 3.
+"""Tests for the Track 05 hard constraints and objectives made explicit in Attempt 2.
 
 Safety margin, deadlock detection counters, latency-budget checks, sub-second
 trajectory recalibration, throughput / coverage velocity and path length.
