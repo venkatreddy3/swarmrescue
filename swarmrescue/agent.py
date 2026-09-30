@@ -16,7 +16,7 @@ controller, so there is no single point of failure.
 from __future__ import annotations
 
 from collections import deque
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import numpy as np
 
@@ -35,6 +35,7 @@ MODE_DEADLOCK = "deadlock"
 MODE_BLOCKED = "blocked"
 MODE_IDLE = "idle"
 MODE_PATROL = "patrol"
+MODE_PING = "ping"
 MODE_OFF = "off"
 
 
@@ -221,16 +222,41 @@ class Robot:
         path = bfs_path(grid, self.pos, goals, blocked)
         return None if path is None else path[1]
 
+    def home_in_on_ping(self, pings: Sequence[Cell], blocked: set[Cell]) -> Cell | None:
+        """First step toward the nearest heard survivor ping.
+
+        Sound travels through rubble, so the robot knows where the survivor is
+        but not the route. It plans optimistically through unknown cells and
+        avoids known debris. Its sensor corrects the plan as it moves, and it
+        reroutes when it finds new debris.
+
+        Returns:
+            A known-free neighbouring cell on the shortest optimistic route, or
+            ``None`` if no ping is heard or no route exists.
+        """
+        if not pings:
+            return None
+        size = self.known.shape[0]
+        goals = np.zeros((size, size), dtype=bool)
+        for cell in pings:
+            goals[cell] = True
+        step = self._reroute(goals, blocked, self.known != DEBRIS)
+        if step is None or self.known[step] != FREE:
+            return None
+        return step
+
     def choose_move(
         self,
         cfg: SwarmConfig,
         blocked: set[Cell],
         others: list[Cell],
         rng: np.random.Generator,
+        pings: Sequence[Cell] = (),
     ) -> Cell | None:
         """Decide this tick's move using only local knowledge.
 
-        Priority: deadlock breaker, then the pheromone rule (while an unvisited
+        Priority: deadlock breaker, then heading to a heard survivor ping, then
+        the pheromone rule (while an unvisited
         neighbour exists), then a BFS reroute to the nearest unvisited
         known-free cell, then (with evaporation) a patrol back to the nearest
         stale cell, then idle to save battery.
@@ -240,6 +266,7 @@ class Robot:
             blocked: Cells the robot perceives as occupied or reserved.
             others: Positions of perceived working teammates, for crowding.
             rng: Seeded random generator.
+            pings: Survivor cells whose acoustic ping the robot hears this tick.
 
         Returns:
             The neighbouring cell to move into, or ``None`` to stay put.
@@ -254,6 +281,11 @@ class Robot:
         if self.stuck_ticks >= DEADLOCK_TICKS and options:
             self.mode = MODE_DEADLOCK
             return options[int(rng.integers(len(options)))]
+
+        step = self.home_in_on_ping(pings, blocked)
+        if step is not None:
+            self.mode = MODE_PING
+            return step
 
         if any(not self.trail.is_visited(nb) for nb in free_nbs):
             if not options:

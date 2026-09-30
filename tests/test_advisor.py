@@ -91,3 +91,12 @@ def test_mission_advisor_class(good_result: SimulationResult, default_cfg: Swarm
     assert advisor.advise(good_result, default_cfg) == advise(good_result, default_cfg, "speed")
     with pytest.raises(ValueError):
         MissionAdvisor("panic")
+
+
+def test_advisor_suggests_pings_when_disabled(default_cfg: SwarmConfig) -> None:
+    """With pings off and survivors missed, the advisor recommends turning pings on."""
+    cfg = default_cfg.with_updates(use_pings=False)
+    result = dataclasses.replace(simulate(cfg.with_updates(seed=1)), survivors_found=3)
+    rec = next(r for r in advise(result, cfg) if r.title == "Listen for survivors")
+    assert rec.changes == {"use_pings": True}
+    assert "Listen for survivors" not in titles(advise(result, default_cfg))

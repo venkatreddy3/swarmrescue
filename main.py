@@ -21,7 +21,7 @@ from swarmrescue.optimizer import IterationLog, run_pso
 from swarmrescue.simulation import SimulationResult, evaluate
 
 HEADER = (
-    f"{'seed':>5} | {'coverage':>8} | {'survivors':>9} | {'t@90%':>5} | "
+    f"{'seed':>5} | {'coverage':>8} | {'survivors':>9} | {'1st surv':>8} | {'t@90%':>5} | "
     f"{'energy':>6} | {'collis.':>7} | {'max lat ms':>10} | {'fitness':>8}"
 )
 
@@ -43,6 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--wall-density", type=float, default=0.18)
     p.add_argument("--max-ticks", type=int, default=300)
     p.add_argument("--priority", choices=PRIORITIES, default="balanced", help="operator goal for the advisor")
+    p.add_argument("--evaporation", action="store_true", help="enable pheromone evaporation (trails fade)")
+    p.add_argument("--evaporation-rate", type=float, default=0.01, help="pheromone fraction lost per tick")
+    p.add_argument("--no-pings", action="store_true", help="disable survivor acoustic pings")
+    p.add_argument("--ping-range", type=int, default=4, help="distance at which robots hear survivors")
     return p
 
 
@@ -51,14 +55,17 @@ def config_from_args(args: argparse.Namespace) -> SwarmConfig:
     return SwarmConfig(
         grid_size=args.grid_size, num_agents=args.agents, num_survivors=args.survivors,
         battery=args.battery, wall_density=args.wall_density, max_ticks=args.max_ticks,
+        use_evaporation=args.evaporation, evaporation_rate=args.evaporation_rate,
+        use_pings=not args.no_pings, ping_range=args.ping_range,
     )
 
 
 def format_row(r: SimulationResult) -> str:
     """One table row for a single mission."""
     t90 = "-" if r.tick_at_90 is None else str(r.tick_at_90)
+    first = "-" if r.first_survivor_tick is None else str(r.first_survivor_tick)
     return (
-        f"{r.seed:>5} | {r.coverage:>8.3f} | {r.survivors_found:>4}/{r.survivors_total:<4} | {t90:>5} | "
+        f"{r.seed:>5} | {r.coverage:>8.3f} | {r.survivors_found:>4}/{r.survivors_total:<4} | {first:>8} | {t90:>5} | "
         f"{r.energy_moves:>6} | {r.collisions:>7} | {r.max_latency_ms:>10.3f} | {r.fitness:>8.3f}"
     )
 
@@ -66,7 +73,9 @@ def format_row(r: SimulationResult) -> str:
 def summarize(results: Sequence[SimulationResult]) -> dict[str, float]:
     """Average metrics over several missions."""
     t90 = [r.tick_at_90 for r in results if r.tick_at_90 is not None]
+    first = [r.first_survivor_tick for r in results if r.first_survivor_tick is not None]
     return {
+        "first_survivor": float(np.mean(first)) if first else float("nan"),
         "coverage": float(np.mean([r.coverage for r in results])),
         "survivors": float(np.mean([r.survivors_ratio for r in results])),
         "t90": float(np.mean(t90)) if t90 else float("nan"),
@@ -87,7 +96,7 @@ def print_table(title: str, results: Sequence[SimulationResult]) -> dict[str, fl
     s = summarize(results)
     print("-" * len(HEADER))
     print(
-        f"{'mean':>5} | {s['coverage']:>8.3f} | {s['survivors']:>8.0%}  | {s['t90']:>5.0f} | "
+        f"{'mean':>5} | {s['coverage']:>8.3f} | {s['survivors']:>8.0%}  | {s['first_survivor']:>8.1f} | {s['t90']:>5.0f} | "
         f"{s['energy']:>6.0f} | {s['collisions']:>7.0f} | {s['latency']:>10.3f} | {s['fitness']:>8.3f}"
     )
     return s
@@ -105,11 +114,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("=" * 78)
     print(f"SwarmRescue mission report - Round {args.round}")
     if args.round == 2:
-        print(f"  Scenario shift at tick {cfg.shift_tick}: {cfg.new_walls} new debris cells, "
+        print(f"  Aftershock at tick {cfg.shift_tick}: {cfg.new_walls} new debris cells, "
               "robot 0 fails, radio link lost")
     print(f"  grid {cfg.grid_size}x{cfg.grid_size}, debris {cfg.wall_density:.0%}, robots {cfg.num_agents}, "
           f"survivors {cfg.num_survivors}, battery {cfg.battery}, max ticks {cfg.max_ticks}")
     print(f"  weights: pheromone={cfg.pheromone_weight}, spread={cfg.spread_weight}, randomness={cfg.randomness}")
+    evap = f"on (rate {cfg.evaporation_rate})" if cfg.use_evaporation else "off"
+    pings = f"on (range {cfg.ping_range})" if cfg.use_pings else "off"
+    print(f"  adaptive features: pheromone evaporation {evap}, survivor acoustic pings {pings}")
     print("=" * 78)
 
     base = evaluate(cfg, args.seeds, args.round)
@@ -137,7 +149,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             held_after = summarize(evaluate(final_cfg, args.eval_seeds, args.round))
             print(f"Held-out seeds {args.eval_seeds[0]}..{args.eval_seeds[-1]} "
                   f"({len(args.eval_seeds)} maps, never seen by PSO):")
-            for key in ("coverage", "survivors", "t90", "energy", "collisions", "fitness"):
+            for key in ("coverage", "survivors", "first_survivor", "t90", "energy", "collisions", "fitness"):
                 print(f"  {key:>10}: {held_before[key]:9.3f} -> {held_after[key]:9.3f}")
 
     print("\nMission Advisor:")

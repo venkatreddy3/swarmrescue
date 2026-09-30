@@ -41,6 +41,8 @@ class SwarmConfig:
         seed: Master random seed (map, survivors, noise, shift).
         use_evaporation: Enable pheromone evaporation (trails fade over time).
         evaporation_rate: Fraction of pheromone lost per tick when enabled.
+        use_pings: Enable survivor acoustic pings (tapping / phone signals).
+        ping_range: Manhattan distance at which a robot hears a survivor.
     """
 
     grid_size: int = 20
@@ -59,6 +61,8 @@ class SwarmConfig:
     seed: int = 0
     use_evaporation: bool = False
     evaporation_rate: float = 0.01
+    use_pings: bool = True
+    ping_range: int = 4
 
     def __post_init__(self) -> None:
         """Validate every field, raising ``ValueError`` on bad values."""
@@ -90,7 +94,7 @@ def validate_config(cfg: SwarmConfig) -> None:
     """
     int_fields = (
         "grid_size", "num_agents", "num_survivors", "max_ticks", "battery",
-        "comm_range", "sense_range", "shift_tick", "new_walls", "seed",
+        "comm_range", "sense_range", "shift_tick", "new_walls", "seed", "ping_range",
     )
     for name in int_fields:
         value = getattr(cfg, name)
@@ -98,7 +102,7 @@ def validate_config(cfg: SwarmConfig) -> None:
             isinstance(value, int) and not isinstance(value, bool),
             f"{name} must be an integer, got {value!r}",
         )
-    for name in ("use_evaporation",):
+    for name in ("use_evaporation", "use_pings"):
         _require(isinstance(getattr(cfg, name), bool), f"{name} must be True or False")
     for name in ("wall_density", "pheromone_weight", "spread_weight", "randomness", "evaporation_rate"):
         value = getattr(cfg, name)
@@ -115,6 +119,7 @@ def validate_config(cfg: SwarmConfig) -> None:
     _require(1 <= cfg.battery <= 100000, "battery must be in [1, 100000]")
     _require(1 <= cfg.comm_range <= 2 * cfg.grid_size, "comm_range must be in [1, 2*grid_size]")
     _require(1 <= cfg.sense_range <= 5, "sense_range must be in [1, 5]")
+    _require(1 <= cfg.ping_range <= 10, "ping_range must be in [1, 10]")
     _require(cfg.seed >= 0, "seed must be non-negative")
     _require(cfg.new_walls >= 0, "new_walls must be non-negative")
     _require(cfg.shift_tick >= 0, "shift_tick must be non-negative")

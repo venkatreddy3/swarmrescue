@@ -19,7 +19,8 @@ from swarmrescue.agent import MODE_BLOCKED, MODE_IDLE, Robot
 from swarmrescue.config import SwarmConfig
 from swarmrescue.coordination import RadioLink, perceive_teammates
 from swarmrescue.world import (
-    DEBRIS, FREE, Aftershock, Cell, DisasterZone, drop_aftershock_debris, generate_disaster_zone, reachable,
+    DEBRIS, FREE, Aftershock, Cell, DisasterZone, drop_aftershock_debris, generate_disaster_zone, manhattan,
+    reachable,
 )
 
 COVERAGE_TARGET: float = 0.9
@@ -79,6 +80,14 @@ class SimulationResult:
     coverage_curve: tuple[float, ...]
     frames: tuple[Frame, ...] = field(default_factory=tuple)
     aftershock: Aftershock | None = None
+    survivor_found_ticks: tuple[int | None, ...] = ()
+    ping_detections: int = 0
+
+    @property
+    def first_survivor_tick(self) -> int | None:
+        """Time-to-first-survivor: tick when the first survivor was found."""
+        ticks = [t for t in self.survivor_found_ticks if t is not None]
+        return min(ticks) if ticks else None
 
     @property
     def survivors_ratio(self) -> float:
@@ -100,6 +109,7 @@ class SimulationResult:
             "fitness": round(self.fitness, 3),
             "max_latency_ms": round(self.max_latency_ms, 3),
             "wall_surprises": self.wall_surprises,
+            "first_survivor_tick": self.first_survivor_tick,
         }
 
 
@@ -199,6 +209,9 @@ class MissionControl:
         self.visited = np.zeros((n, n), dtype=bool)
         self.survivor_index = {s.cell: s.survivor_id for s in self.zone.survivors}
         self.found = [False] * len(self.zone.survivors)
+        self.found_ticks: list[int | None] = [None] * len(self.zone.survivors)
+        self.ping_detections = 0
+        self.tick = 0
         self.aftershock: Aftershock | None = None
         self.aftershock_tick = max(1, cfg.shift_tick)
         self.reachable_mask = self.zone.reachable_mask.copy()
@@ -213,8 +226,21 @@ class MissionControl:
         for r in self.robots:
             self.visited[r.pos] = True
             sid = self.survivor_index.get(r.pos)
-            if sid is not None:
+            if sid is not None and not self.found[sid]:
                 self.found[sid] = True
+                self.found_ticks[sid] = self.tick
+
+    def heard_pings(self, robot: Robot) -> list[Cell]:
+        """Acoustic pings ``robot`` hears: unfound survivors within ``ping_range``.
+
+        Survivors stop pinging once found (they have been reached).
+        """
+        if not self.cfg.use_pings or not robot.active:
+            return []
+        return [
+            s.cell for s in self.zone.survivors
+            if not self.found[s.survivor_id] and manhattan(robot.pos, s.cell) <= self.cfg.ping_range
+        ]
 
     def coverage(self) -> float:
         """Current coverage of the reachable disaster zone."""
@@ -238,6 +264,7 @@ class MissionControl:
 
     def step(self, tick: int) -> None:
         """Advance the mission by one tick."""
+        self.tick = tick
         if self.round_no == 2 and tick == self.aftershock_tick:
             self.trigger_aftershock(tick)
 
@@ -252,7 +279,9 @@ class MissionControl:
         occupied = set(previous)
         for r in self.robots:
             blocked, others = perceive_teammates(r, self.robots, radius)
-            move = r.choose_move(self.cfg, blocked, others, self.robot_rng)
+            pings = self.heard_pings(r)
+            self.ping_detections += bool(pings)
+            move = r.choose_move(self.cfg, blocked, others, self.robot_rng, pings)
             if move is not None and (self.zone.grid[move] != FREE or move in occupied):
                 self.interlock_trips += 1  # hardware safety interlock (should never fire)
                 r.mode = MODE_BLOCKED
@@ -329,6 +358,8 @@ class MissionControl:
             coverage_curve=tuple(curve),
             frames=tuple(frames),
             aftershock=self.aftershock,
+            survivor_found_ticks=tuple(self.found_ticks),
+            ping_detections=self.ping_detections,
         )
 
 

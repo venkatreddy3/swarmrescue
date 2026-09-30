@@ -40,7 +40,7 @@ C_FOUND = "#009E73"      # bluish green star
 C_MISSING = "#CC79A7"    # reddish purple triangle
 
 SEVERITY_LABEL = {"critical": "CRITICAL", "warning": "WARNING", "info": "INFO", "success": "OK"}
-WEIGHT_DEFAULTS = {"pheromone_weight": 1.0, "spread_weight": 0.5, "randomness": 0.1}
+WEIGHT_DEFAULTS = {"pheromone_weight": 1.0, "spread_weight": 0.5, "randomness": 0.1, "evaporation_rate": 0.01}
 
 
 @st.cache_data(show_spinner=False)
@@ -168,6 +168,8 @@ def show_metrics(result: SimulationResult) -> None:
         ("Collisions", str(result.collisions)),
         ("Max decision latency", f"{result.max_latency_ms:.2f} ms"),
         ("Debris found on known routes", str(result.wall_surprises)),
+        ("Time to first survivor (ticks)", "none found" if result.first_survivor_tick is None else str(result.first_survivor_tick)),
+        ("Ticks a robot heard a survivor ping", str(result.ping_detections)),
     ]
     for i in range(0, len(items), 2):
         cols = st.columns(2)
@@ -206,6 +208,14 @@ def sidebar() -> tuple[dict[str, Any], int, str]:
         st.slider("Pheromone weight (avoid visited cells)", 0.0, 3.0, step=0.01, key="pheromone_weight")
         st.slider("Spread weight (avoid teammates)", 0.0, 3.0, step=0.01, key="spread_weight")
         st.slider("Randomness", 0.0, 1.0, step=0.01, key="randomness")
+    with sb.expander("Adaptive features"):
+        use_pings = st.checkbox("Survivor acoustic pings", value=True,
+                                help="Survivors tap or signal; robots within range head straight to them.")
+        ping_range = st.slider("Ping range (cells)", 1, 10, 4, disabled=not use_pings)
+        use_evaporation = st.checkbox("Pheromone evaporation", value=False,
+                                      help="Trails fade over time so long-searched areas are revisited.")
+        st.slider("Evaporation rate per tick", 0.0, 0.2, step=0.005, key="evaporation_rate",
+                  disabled=not use_evaporation)
     cfg = {
         "grid_size": grid, "num_agents": agents, "wall_density": density, "battery": battery,
         "num_survivors": survivors, "max_ticks": max_ticks, "seed": int(seed),
@@ -213,6 +223,8 @@ def sidebar() -> tuple[dict[str, Any], int, str]:
         "pheromone_weight": st.session_state["pheromone_weight"],
         "spread_weight": st.session_state["spread_weight"],
         "randomness": st.session_state["randomness"],
+        "use_pings": use_pings, "ping_range": ping_range,
+        "use_evaporation": use_evaporation, "evaporation_rate": st.session_state["evaporation_rate"],
     }
     return cfg, round_no, priority
 
