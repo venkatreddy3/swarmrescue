@@ -169,6 +169,47 @@ def test_mission_control_matches_simulate(default_cfg: SwarmConfig) -> None:
     assert a.fitness == b.fitness and a.final_positions == b.final_positions
 
 
+def test_end_message_format_exact() -> None:
+    """The operator message matches the agreed wording; coverage is rounded down."""
+    from swarmrescue.simulation import REASON_COMPLETE, format_end_message
+
+    assert format_end_message(253, "robot batteries depleted", 0.857, 4, 5, 0) == (
+        "Mission ended at tick 253: robot batteries depleted (85% coverage, 4 of 5 survivors found, 0 collisions)."
+    )
+    assert "(99% coverage" in format_end_message(10, "x", 0.9999, 1, 1, 0)
+    assert format_end_message(142, REASON_COMPLETE, 1.0, 5, 5, 0).startswith("Mission complete at tick 142:")
+
+
+@pytest.mark.parametrize(
+    ("changes", "round_no", "expected"),
+    [
+        ({"seed": 1}, 1, "every reachable cell searched and every survivor found"),
+        ({"seed": 1, "battery": 60}, 1, "robot batteries depleted"),
+        ({"seed": 1, "max_ticks": 80}, 1, "time limit of 80 ticks reached"),
+        ({"seed": 1}, 2, "robot batteries depleted"),
+    ],
+)
+def test_mission_end_reason_is_real(changes: dict, round_no: int, expected: str) -> None:
+    """The reported reason matches what actually stopped the mission."""
+    r = simulate(SwarmConfig(**changes), round_no)
+    assert r.end_reason == expected
+    assert r.end_message.startswith(f"Mission {'complete' if 'every' in expected else 'ended'} at tick {r.ticks_run}: ")
+    if expected == "robot batteries depleted":
+        assert r.depleted_robots == sum(r.alive)
+
+
+def test_end_reason_for_failed_and_mixed_swarms() -> None:
+    """All-failed and partly-depleted swarms get their own reasons."""
+    from swarmrescue.agent import Robot
+    from swarmrescue.simulation import mission_end_reason
+
+    a, b = Robot(0, (0, 0), 5, 10), Robot(1, (0, 1), 5, 0)
+    assert mission_end_reason([a, b], False, False, 300).startswith("1 of 2 working robots out of battery")
+    a.fail()
+    b.fail()
+    assert mission_end_reason([a, b], False, False, 300) == "all robots have failed"
+
+
 def test_ablation_script_runs() -> None:
     """scripts/ablation.py produces one Markdown row per variant for both rounds."""
     import subprocess

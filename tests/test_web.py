@@ -41,7 +41,8 @@ for (let map = 0; map < MAPS; map++) {
     els.step.handlers.click();
   }
   out.push({ collisions: +els["m-col"].textContent, coverage: parseFloat(els["m-cov"].textContent) / 100,
-             survivors: els["m-surv"].textContent, radio: els["m-radio"].textContent, shocked });
+             survivors: els["m-surv"].textContent, radio: els["m-radio"].textContent, shocked,
+             tick: +els["m-tick"].textContent, status: els.status.textContent });
 }
 console.log(JSON.stringify(out));
 """
@@ -120,3 +121,41 @@ def test_js_port_is_collision_free_across_maps() -> None:
         assert 0.0 <= run["coverage"] <= 1.0
         assert run["radio"] == ("lost" if run["shocked"] else "online")
     assert sum(r["coverage"] for r in runs) / len(runs) > 0.9  # the port actually explores
+
+
+END_MESSAGE = re.compile(
+    r"^Mission (complete|ended) at tick (\d+): (.+) \((\d+)% coverage, (\d) of 5 survivors found, (\d+) collisions\)\.$"
+)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js not installed")
+def test_js_port_reports_real_end_reason() -> None:
+    """When a mission stops, the status line gives the real reason, tick and metrics."""
+    code = f"const SCRIPT = {json.dumps(SCRIPT)}; const MAPS = 12;\n{HARNESS}"
+    runs = json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=120, check=True).stdout)
+    reasons = set()
+    for run in runs:
+        m = END_MESSAGE.match(run["status"])
+        assert m, run["status"]
+        verb, tick, reason, pct, found, collisions = m.groups()
+        assert int(tick) == run["tick"] and int(collisions) == run["collisions"] == 0
+        assert run["survivors"].startswith(found)
+        assert int(pct) == int(run["coverage"] * 100 + 1e-9) or int(pct) == int(run["coverage"] * 100) - 1
+        assert (verb == "complete") == (reason == "every reachable cell searched and every survivor found")
+        reasons.add(reason)
+    assert reasons <= {
+        "every reachable cell searched and every survivor found",
+        "robot batteries depleted",
+        "time limit of 300 ticks reached",
+        "robots have nothing left to search in their maps (remaining cells are cut off or unknown)",
+    } | {r for r in reasons if "working robots out of battery" in r}
+
+
+def test_js_end_reason_wording_matches_python() -> None:
+    """The web page and the Python simulator use the same end-reason wording."""
+    from swarmrescue.simulation import REASON_COMPLETE
+
+    assert f'const COMPLETE = "{REASON_COMPLETE}";' in SCRIPT
+    for phrase in ("robot batteries depleted", "all robots have failed", "time limit of ",
+                   "nothing left to search in their maps", "survivors found, "):
+        assert phrase in SCRIPT

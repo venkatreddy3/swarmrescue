@@ -140,6 +140,7 @@ footer{color:var(--muted);padding:32px 16px 40px;font-size:.9rem}
   const N = 20, DENSITY = 0.18, SURVIVORS = 5, BATTERY = 250, COMM = 5, SENSE = 1, PROX = 2;
   const MAX_TICKS = 300, WP = 1.0, WS = 0.5, RND = 0.1, PING_RANGE = 4, NEW_DEBRIS = 25, DEADLOCK = 3;
   const COL = { free: "#F2F2F2", seen: "#56B4E9", debris: "#222222", shock: "#8C8C8C", robot: "#E69F00", failed: "#D55E00", found: "#009E73", missing: "#CC79A7" };
+  const COMPLETE = "every reachable cell searched and every survivor found";
   const $ = (id) => document.getElementById(id);
   const canvas = $("map"), ctx = canvas.getContext("2d");
   let seed = 1, S = null, timer = null;
@@ -296,11 +297,27 @@ footer{color:var(--muted);padding:32px 16px 40px;font-size:.9rem}
     record();
     const cov = coverage(), allFound = S.survivors.every((s) => s.found);
     const idle = S.robots.every((r) => !active(r) || r.mode === "idle");
-    if (S.tick >= MAX_TICKS || idle || (cov >= 1 && allFound)) {
+    const complete = cov >= 1 && allFound;
+    if (S.tick >= MAX_TICKS || idle || complete) {
       S.done = true; stop();
-      announce(`Mission complete at tick ${S.tick}: ${Math.round(cov * 100)}% coverage, ${S.survivors.filter((s) => s.found).length} of ${SURVIVORS} survivors found, ${S.collisions} collisions.`);
+      announce(endMessage(endReason(complete, !idle && !complete), cov));
     }
     render();
+  }
+  // Same wording as the Python simulator's mission_end_reason / format_end_message.
+  function endReason(complete, timeUp) {
+    if (complete) return COMPLETE;
+    if (timeUp) return `time limit of ${MAX_TICKS} ticks reached`;
+    const working = S.robots.filter((r) => r.alive);
+    if (!working.length) return "all robots have failed";
+    const depleted = working.filter((r) => r.battery <= 0).length;
+    if (depleted === working.length) return "robot batteries depleted";
+    if (depleted) return `${depleted} of ${working.length} working robots out of battery; the rest have nothing left to search in their maps`;
+    return "robots have nothing left to search in their maps (remaining cells are cut off or unknown)";
+  }
+  function endMessage(reason, cov) {
+    const found = S.survivors.filter((s) => s.found).length, pct = Math.floor(cov * 100 + 1e-9);
+    return `Mission ${reason === COMPLETE ? "complete" : "ended"} at tick ${S.tick}: ${reason} (${pct}% coverage, ${found} of ${SURVIVORS} survivors found, ${S.collisions} collisions).`;
   }
   function aftershock() {
     if (!S || S.shocked) return;

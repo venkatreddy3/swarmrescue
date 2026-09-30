@@ -150,6 +150,8 @@ def print_table(title: str, results: Sequence[SimulationResult]) -> dict[str, fl
         f"{'mean':>5} | {s['coverage']:>8.3f} | {s['survivors']:>8.0%}  | {s['first_survivor']:>8.1f} | {s['t90']:>5.0f} | "
         f"{s['energy']:>6.0f} | {s['collisions']:>7.0f} | {s['latency']:>10.3f} | {s['fitness']:>8.3f}"
     )
+    for r in results:
+        print(f"  seed {r.seed}: {r.end_message}")
     return s
 
 

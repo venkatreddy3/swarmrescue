@@ -10,6 +10,7 @@ orders from it, so it is not a central controller.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -82,6 +83,14 @@ class SimulationResult:
     aftershock: Aftershock | None = None
     survivor_found_ticks: tuple[int | None, ...] = ()
     ping_detections: int = 0
+    end_reason: str = ""
+
+    @property
+    def end_message(self) -> str:
+        """Operator-facing sentence explaining why and when the mission ended."""
+        return format_end_message(
+            self.ticks_run, self.end_reason, self.coverage, self.survivors_found, self.survivors_total, self.collisions
+        )
 
     @property
     def first_survivor_tick(self) -> int | None:
@@ -137,6 +146,50 @@ def compute_fitness(
         - 0.01 * energy_moves
         - 100.0 * collisions
     )
+
+
+REASON_COMPLETE = "every reachable cell searched and every survivor found"
+
+
+def mission_end_reason(robots: list[Robot], complete: bool, time_up: bool, max_ticks: int) -> str:
+    """Plain-English reason the mission stopped.
+
+    Args:
+        robots: The swarm at the end of the mission.
+        complete: Full coverage reached and every survivor found.
+        time_up: The time limit was reached.
+        max_ticks: The mission time limit.
+
+    Returns:
+        A short reason such as ``"robot batteries depleted"``.
+    """
+    if complete:
+        return REASON_COMPLETE
+    if time_up:
+        return f"time limit of {max_ticks} ticks reached"
+    working = [r for r in robots if r.alive]
+    if not working:
+        return "all robots have failed"
+    depleted = sum(1 for r in working if r.battery <= 0)
+    if depleted == len(working):
+        return "robot batteries depleted"
+    if depleted:
+        return (f"{depleted} of {len(working)} working robots out of battery; "
+                "the rest have nothing left to search in their maps")
+    return "robots have nothing left to search in their maps (remaining cells are cut off or unknown)"
+
+
+def format_end_message(
+    tick: int, reason: str, coverage: float, found: int, total: int, collisions: int
+) -> str:
+    """``"Mission ended at tick 253: robot batteries depleted (85% coverage, 4 of 5 survivors found, 0 collisions)."``
+
+    Coverage is rounded *down*, so an unfinished search never reads as 100%.
+    """
+    verb = "complete" if reason == REASON_COMPLETE else "ended"
+    pct = math.floor(coverage * 100 + 1e-9)
+    return (f"Mission {verb} at tick {tick}: {reason} "
+            f"({pct}% coverage, {found} of {total} survivors found, {collisions} collisions).")
 
 
 def compute_coverage(visited: np.ndarray, reachable_mask: np.ndarray) -> float:
@@ -315,6 +368,7 @@ class MissionControl:
         curve = [coverage]
         frames = [self.snapshot(0, coverage)] if self.record_frames else []
         ticks_run = 0
+        complete = False
         for tick in range(1, cfg.max_ticks + 1):
             ticks_run = tick
             self.step(tick)
@@ -326,8 +380,12 @@ class MissionControl:
                 frames.append(self.snapshot(tick, coverage))
             aftershock_pending = self.round_no == 2 and tick < self.aftershock_tick
             swarm_done = all(not r.active or r.mode == MODE_IDLE for r in self.robots)
-            if not aftershock_pending and (swarm_done or (coverage >= 1.0 and all(self.found))):
+            complete = coverage >= 1.0 and all(self.found)
+            if not aftershock_pending and (swarm_done or complete):
                 break
+        time_up = not complete and ticks_run >= cfg.max_ticks and not all(
+            not r.active or r.mode == MODE_IDLE for r in self.robots
+        )
 
         energy = sum(r.moves for r in self.robots)
         ratio = sum(self.found) / len(self.found) if self.found else 1.0
@@ -360,6 +418,7 @@ class MissionControl:
             aftershock=self.aftershock,
             survivor_found_ticks=tuple(self.found_ticks),
             ping_detections=self.ping_detections,
+            end_reason=mission_end_reason(self.robots, complete, time_up, cfg.max_ticks),
         )
 
 

@@ -31,7 +31,7 @@ from swarmrescue.advisor import PRIORITIES, advise  # noqa: E402
 from swarmrescue.config import TUNABLE_BOUNDS, SwarmConfig  # noqa: E402
 from swarmrescue.optimizer import PSOResult, run_pso  # noqa: E402
 from swarmrescue.settings import SEED_BOUNDS, load_settings  # noqa: E402
-from swarmrescue.simulation import Frame, SimulationResult, simulate  # noqa: E402
+from swarmrescue.simulation import REASON_COMPLETE, Frame, SimulationResult, simulate  # noqa: E402
 
 # Okabe-Ito colour-blind-safe palette.
 C_UNEXPLORED = "#F2F2F2"
@@ -320,6 +320,7 @@ def main() -> None:
         show_map(result)
     with right:
         st.subheader("Mission metrics")
+        (st.success if result.end_reason == REASON_COMPLETE else st.info)(result.end_message)
         show_metrics(result)
         st.subheader("Coverage over time")
         st.line_chart(pd.DataFrame({"coverage": result.coverage_curve}), x_label="tick", y_label="coverage")
