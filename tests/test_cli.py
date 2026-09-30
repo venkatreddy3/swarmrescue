@@ -60,3 +60,10 @@ def test_bounded_parsers_accept_edges() -> None:
     """Range edges are inclusive."""
     assert main.bounded_int(1, 5)("5") == 5
     assert main.bounded_float(0.0, 1.0)("0") == 0.0
+
+
+def test_overfitting_guard() -> None:
+    """Tuned weights are only recommended when held-out fitness does not drop."""
+    assert main.generalizes(120.0, 121.0)
+    assert main.generalizes(120.0, 120.0)
+    assert not main.generalizes(120.258, 118.212)

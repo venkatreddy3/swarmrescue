@@ -1,0 +1,3 @@
+# Keep the static demo byte-identical across platforms (its CSP uses content hashes).
+web/* text eol=lf
+*.png binary

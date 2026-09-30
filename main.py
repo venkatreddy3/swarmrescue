@@ -132,6 +132,11 @@ def summarize(results: Sequence[SimulationResult]) -> dict[str, float]:
     }
 
 
+def generalizes(held_out_before: float, held_out_after: float) -> bool:
+    """Over-fitting guard: tuned weights must not lower fitness on unseen maps."""
+    return held_out_after >= held_out_before
+
+
 def print_table(title: str, results: Sequence[SimulationResult]) -> dict[str, float]:
     """Print per-seed rows plus the mean, returning the summary."""
     print(f"\n{title}")
@@ -203,6 +208,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                   f"({len(args.eval_seeds)} maps, never seen by PSO):")
             for key in ("coverage", "survivors", "first_survivor", "t90", "energy", "collisions", "fitness"):
                 print(f"  {key:>10}: {held_before[key]:9.3f} -> {held_after[key]:9.3f}")
+            if not generalizes(held_before["fitness"], held_after["fitness"]):
+                print("Over-fitting guard: tuned weights score lower on held-out maps, "
+                      "so the advisor keeps the default weights.")
+                pso = None
+                final_cfg, final_results = cfg, base
 
     print("\nMission Advisor:")
     for rec in advise(final_results, final_cfg, args.priority, pso):

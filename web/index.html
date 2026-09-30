@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SwarmRescue – Live Swarm Search and Rescue Demo</title>
+<meta name="description" content="SwarmRescue: decentralized ant-pheromone robot swarm that searches a collapsed building for trapped survivors. Live in-browser simulation with aftershock, robot failure and radio loss.">
+<meta name="theme-color" content="#0b3d91">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%23E69F00'/%3E%3C/svg%3E">
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#4a4a4a;--card:#f5f7fa;--line:#d0d7de;--accent:#0b3d91;--accent-fg:#fff;--warn:#8a3b00}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1419;--fg:#e8e8e8;--muted:#b8bec6;--card:#1a2129;--line:#3a4450;--accent:#8fb8ff;--accent-fg:#0f1419;--warn:#ffb070}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+.skip{position:absolute;left:-999px;top:0;background:var(--accent);color:var(--accent-fg);padding:8px 12px;z-index:9}
+.skip:focus{left:8px}
+header,main,footer{max-width:1100px;margin:0 auto;padding:0 16px}
+header{padding-top:28px}
+h1{font-size:clamp(1.6rem,4vw,2.3rem);margin:0 0 4px;line-height:1.2}
+h2{font-size:1.3rem;margin:32px 0 10px}
+.tag{color:var(--muted);margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.sim{display:grid;grid-template-columns:minmax(0,500px) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:780px){.sim{grid-template-columns:minmax(0,1fr)}}
+canvas{width:100%;height:auto;aspect-ratio:1;border:1px solid var(--line);border-radius:8px;background:#f2f2f2;display:block}
+.controls{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+button{font:inherit;min-height:44px;padding:8px 14px;border-radius:8px;border:2px solid var(--accent);background:var(--accent);color:var(--accent-fg);cursor:pointer;font-weight:600}
+button.secondary{background:transparent;color:var(--accent)}
+button:disabled{opacity:.5;cursor:not-allowed}
+button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid #E69F00;outline-offset:2px}
+label{display:flex;align-items:center;gap:8px;margin:6px 0;flex-wrap:wrap}
+select,input[type=range]{font:inherit;min-height:36px}
+input[type=checkbox]{width:20px;height:20px}
+dl.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0}
+dl.metrics div{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+dt{font-size:.8rem;color:var(--muted)}
+dd{margin:0;font-size:1.25rem;font-weight:700;font-variant-numeric:tabular-nums}
+#status{font-weight:600;min-height:3em}
+.legend{list-style:none;padding:0;margin:12px 0 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:6px}
+.legend li{display:flex;align-items:center;gap:8px}
+.legend svg{flex:none;border:1px solid var(--line);border-radius:3px;background:#f2f2f2}
+.table-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:560px;font-variant-numeric:tabular-nums}
+th,td{border:1px solid var(--line);padding:6px 10px;text-align:right}
+th:first-child,td:first-child{text-align:left}
+thead th{background:var(--card)}
+.links{display:flex;flex-wrap:wrap;gap:12px}
+.links a{display:inline-block;padding:10px 16px;border:2px solid var(--accent);border-radius:8px;text-decoration:none;font-weight:600}
+footer{color:var(--muted);padding:32px 16px 40px;font-size:.9rem}
+.note{color:var(--muted);font-size:.92rem}
+</style>
+</head>
+<body>
+<a class="skip" href="#demo">Skip to live demo</a>
+<header>
+  <h1>SwarmRescue</h1>
+  <p class="tag">Decentralized ant-pheromone multi-robot exploration for disaster-zone search and rescue · OptiForge 2026, Track 05</p>
+</header>
+<main>
+  <section aria-labelledby="problem-h">
+    <h2 id="problem-h">The problem</h2>
+    <p>After an earthquake, a swarm of rescue robots enters a collapsed building (a grid of free floor and debris). The robots must search every reachable cell and find trapped survivors quickly, without collisions and within their battery budget. There is no central controller. Each robot decides its own move from local sensing, a digital <strong>pheromone trail</strong> of cells already searched, and trails shared over a short-range <strong>radio link</strong>. When nearby cells are all searched, it takes a BFS route to the nearest unsearched cell. Survivors emit <strong>acoustic pings</strong> that nearby robots home in on. An <strong>aftershock</strong> can drop new debris, knock out a robot and cut the radio. Because there is no single point of failure, the swarm keeps searching.</p>
+  </section>
+
+  <section id="demo" aria-labelledby="demo-h">
+    <h2 id="demo-h">Live simulation</h2>
+    <div class="sim">
+      <div>
+        <canvas id="map" width="500" height="500" role="img" aria-label="Disaster zone map loading"></canvas>
+        <ul class="legend" aria-label="Map legend">
+          <li><svg width="22" height="22" aria-hidden="true"><rect x="1" y="1" width="20" height="20" fill="#F2F2F2"/></svg>Unsearched free cell</li>
+          <li><svg width="22" height="22" aria-hidden="true"><rect x="1" y="1" width="20" height="20" fill="#56B4E9"/></svg>Searched cell (sky blue)</li>
+          <li><svg width="22" height="22" aria-hidden="true"><rect x="1" y="1" width="20" height="20" fill="#222"/></svg>Debris / wall (black)</li>
+          <li><svg width="22" height="22" aria-hidden="true"><rect x="1" y="1" width="20" height="20" fill="#8C8C8C"/><path d="M6 6L16 16M16 6L6 16" stroke="#fff" stroke-width="2"/></svg>Aftershock debris (grey with ×)</li>
+          <li><svg width="22" height="22" aria-hidden="true"><circle cx="11" cy="11" r="8" fill="#E69F00" stroke="#000"/></svg>Robot (orange circle, number = id)</li>
+          <li><svg width="22" height="22" aria-hidden="true"><path d="M5 5L17 17M17 5L5 17" stroke="#D55E00" stroke-width="4"/></svg>Failed robot (vermillion ×)</li>
+          <li><svg width="22" height="22" aria-hidden="true"><polygon points="11,2 13.6,8.4 20.5,8.9 15.2,13.3 16.9,20 11,16.3 5.1,20 6.8,13.3 1.5,8.9 8.4,8.4" fill="#009E73" stroke="#000"/></svg>Survivor found (green star)</li>
+          <li><svg width="22" height="22" aria-hidden="true"><polygon points="11,3 20,19 2,19" fill="#CC79A7" stroke="#000"/></svg>Survivor not yet found (purple triangle)</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="controls" role="group" aria-label="Simulation controls">
+          <button id="play" type="button" aria-pressed="false">Play</button>
+          <button id="step" type="button" class="secondary">Step one tick</button>
+          <button id="shock" type="button" class="secondary">Aftershock</button>
+          <button id="reset" type="button" class="secondary">New disaster zone</button>
+        </div>
+        <label for="robots">Number of robots
+          <select id="robots"><option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option><option>8</option></select>
+        </label>
+        <label for="speed">Speed (ticks per second) <input id="speed" type="range" min="1" max="40" value="12"></label>
+        <label for="pings"><input id="pings" type="checkbox" checked> Survivor acoustic pings</label>
+        <dl class="metrics" aria-label="Live mission metrics">
+          <div><dt>Tick</dt><dd id="m-tick">0</dd></div>
+          <div><dt>Coverage</dt><dd id="m-cov">0%</dd></div>
+          <div><dt>Survivors found</dt><dd id="m-surv">0 / 5</dd></div>
+          <div><dt>Collisions</dt><dd id="m-col">0</dd></div>
+          <div><dt>Time to first survivor</dt><dd id="m-first">–</dd></div>
+          <div><dt>Energy (moves)</dt><dd id="m-energy">0</dd></div>
+          <div><dt>Radio link</dt><dd id="m-radio">online</dd></div>
+          <div><dt>Map seed</dt><dd id="m-seed">1</dd></div>
+        </dl>
+        <p id="status" aria-live="polite">Press Play to deploy the swarm.</p>
+        <p class="note">This is a JavaScript port of the Python simulator: the same pheromone score, BFS reroute, deadlock breaker, idle mode, acoustic pings and collision-free sequential moves. Its random numbers differ, so the maps are not the same as the Python seeds.</p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="results-h">
+    <h2 id="results-h">Real results (Python simulator, default settings, seeds 1–3)</h2>
+    <div class="table-wrap">
+      <table>
+        <caption class="note">Mean over 3 disaster zones, 20×20 grid, 4 robots, 5 survivors. Output of <code>python main.py --round N --tune</code>.</caption>
+        <thead><tr><th scope="col">Scenario</th><th scope="col">Coverage</th><th scope="col">Survivors</th><th scope="col">1st survivor (tick)</th><th scope="col">90% coverage (tick)</th><th scope="col">Energy</th><th scope="col">Collisions</th><th scope="col">Fitness</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Round 1 · default weights</th><td>100.0%</td><td>5 / 5</td><td>21.3</td><td>110</td><td>572</td><td>0</td><td>126.95</td></tr>
+          <tr><th scope="row">Round 1 · PSO-tuned</th><td>100.0%</td><td>5 / 5</td><td>16.7</td><td>98</td><td>538</td><td>0</td><td>128.06</td></tr>
+          <tr><th scope="row">Round 2 (aftershock) · default</th><td>96.7%</td><td>5 / 5</td><td>21.3</td><td>175</td><td>807</td><td>0</td><td>116.94</td></tr>
+          <tr><th scope="row">Round 2 (aftershock) · PSO-tuned</th><td>99.8%</td><td>5 / 5</td><td>17.7</td><td>133</td><td>792</td><td>0</td><td>123.02</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">On 10 held-out maps that PSO never saw, Round 2 fitness rose from 116.50 (Attempt 1, no pings) to 120.26 with acoustic pings, and to 121.03 with pings plus PSO-tuned pheromone evaporation. Survivors found went from 94% to 100%, and the average time to the first survivor fell from 13.9 to 8.5 ticks. Collisions were zero in every run.</p>
+  </section>
+
+  <section aria-labelledby="links-h">
+    <h2 id="links-h">Explore more</h2>
+    <div class="links">
+      <a id="dashboard-link" href="https://github.com/venkatreddy3/swarmrescue#demo">Streamlit Mission Control dashboard</a>
+      <a href="https://github.com/venkatreddy3/swarmrescue">GitHub repository</a>
+    </div>
+  </section>
+</main>
+<footer>SwarmRescue · MIT License · Aligned with SDG 9 (Target 9.4) and SDG 11 (Target 11.5). This static page makes no network requests and sets no cookies.</footer>
+<script>
+(() => {
+  "use strict";
+  const N = 20, DENSITY = 0.18, SURVIVORS = 5, BATTERY = 250, COMM = 5, SENSE = 1, PROX = 2;
+  const MAX_TICKS = 300, WP = 1.0, WS = 0.5, RND = 0.1, PING_RANGE = 4, NEW_DEBRIS = 25, DEADLOCK = 3;
+  const COL = { free: "#F2F2F2", seen: "#56B4E9", debris: "#222222", shock: "#8C8C8C", robot: "#E69F00", failed: "#D55E00", found: "#009E73", missing: "#CC79A7" };
+  const $ = (id) => document.getElementById(id);
+  const canvas = $("map"), ctx = canvas.getContext("2d");
+  let seed = 1, S = null, timer = null;
+
+  function rng32(a) {
+    return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+  const row = (i) => (i / N) | 0, col = (i) => i % N;
+  const man = (a, b) => Math.abs(row(a) - row(b)) + Math.abs(col(a) - col(b));
+  function nbrs(i) {
+    const r = row(i), c = col(i), o = [];
+    if (r > 0) o.push(i - N); if (r < N - 1) o.push(i + N); if (c > 0) o.push(i - 1); if (c < N - 1) o.push(i + 1);
+    return o;
+  }
+  function bfsDist(free, sources) {
+    const d = new Int32Array(N * N).fill(-1), q = new Int32Array(N * N); let h = 0, t = 0;
+    for (const s of sources) if (free[s] && d[s] < 0) { d[s] = 0; q[t++] = s; }
+    while (h < t) { const x = q[h++]; for (const y of nbrs(x)) if (free[y] && d[y] < 0) { d[y] = d[x] + 1; q[t++] = y; } }
+    return d;
+  }
+  // BFS reroute: first step of the shortest path from start to the nearest goal cell, or -1.
+  function bfsStep(pass, start, goal, blocked) {
+    const par = new Int32Array(N * N).fill(-2), q = new Int32Array(N * N); let h = 0, t = 0;
+    par[start] = -1; q[t++] = start;
+    while (h < t) {
+      const x = q[h++];
+      for (const y of nbrs(x)) {
+        if (par[y] !== -2 || !pass(y) || blocked.has(y)) continue;
+        par[y] = x;
+        if (goal(y)) { let s = y; while (par[s] !== start) s = par[s]; return s; }
+        q[t++] = y;
+      }
+    }
+    return -1;
+  }
+
+  function newMission() {
+    const rand = rng32(seed * 7919 + 17), R = +$("robots").value, need = R + SURVIVORS + 1;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const grid = new Uint8Array(N * N);
+      for (let i = 0; i < N * N; i++) grid[i] = rand() < DENSITY ? 1 : 0;
+      grid[0] = grid[1] = grid[N] = grid[N + 1] = 0;
+      const free = grid.map((v) => (v === 0 ? 1 : 0)), d = bfsDist(free, [0]);
+      const order = []; let freeCount = 0;
+      for (let i = 0; i < N * N; i++) { freeCount += free[i]; if (d[i] >= 0) order.push(i); }
+      if (order.length < Math.max(need, 0.4 * freeCount)) continue;
+      order.sort((a, b) => d[a] - d[b] || a - b);
+      const cand = order.slice(R);
+      for (let i = cand.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [cand[i], cand[j]] = [cand[j], cand[i]]; }
+      S = { grid, rand, tick: 0, collisions: 0, trips: 0, radio: true, shocked: false, first: null, done: false,
+        reach: Uint8Array.from(d, (v) => (v >= 0 ? 1 : 0)), visited: new Uint8Array(N * N), shockCells: new Set(),
+        survivors: cand.slice(0, SURVIVORS).map((cell) => ({ cell, found: false })),
+        robots: order.slice(0, R).map((pos, id) => {
+          const rb = { id, pos, battery: BATTERY, alive: true, known: new Int8Array(N * N).fill(-1),
+            trail: new Float32Array(N * N), seen: new Uint8Array(N * N), stuck: 0, moves: 0, mode: "idle" };
+          rb.trail[pos] = 1; rb.seen[pos] = 1; rb.known[pos] = 0; return rb;
+        }) };
+      record();
+      $("shock").disabled = false;
+      announce(`New disaster zone ${seed}: ${R} robots deployed at the entry point. ${SURVIVORS} survivors are trapped.`);
+      return;
+    }
+  }
+
+  const active = (rb) => rb.alive && rb.battery > 0;
+  function sense(rb) {
+    const r = row(rb.pos), c = col(rb.pos);
+    for (let rr = Math.max(0, r - SENSE); rr <= Math.min(N - 1, r + SENSE); rr++)
+      for (let cc = Math.max(0, c - SENSE); cc <= Math.min(N - 1, c + SENSE); cc++) rb.known[rr * N + cc] = S.grid[rr * N + cc];
+  }
+  // Radio link: robots in range merge pheromone trails and debris maps (element-wise max).
+  function shareTrails() {
+    if (!S.radio) return;
+    const alive = S.robots.filter((r) => r.alive);
+    const snap = alive.map((r) => ({ trail: r.trail.slice(), seen: r.seen.slice(), known: r.known.slice() }));
+    for (let a = 0; a < alive.length; a++) for (let b = a + 1; b < alive.length; b++) {
+      if (man(alive[a].pos, alive[b].pos) > COMM) continue;
+      for (const [dst, src] of [[alive[a], snap[b]], [alive[b], snap[a]]])
+        for (let i = 0; i < N * N; i++) {
+          if (src.trail[i] > dst.trail[i]) dst.trail[i] = src.trail[i];
+          if (src.seen[i]) dst.seen[i] = 1;
+          if (src.known[i] > dst.known[i]) dst.known[i] = src.known[i];
+        }
+    }
+  }
+  function perceive(rb) {
+    const radius = S.radio ? Math.max(COMM, PROX) : PROX, blocked = new Set(), others = [];
+    for (const o of S.robots) if (o !== rb && man(o.pos, rb.pos) <= radius) { blocked.add(o.pos); if (o.alive) others.push(o.pos); }
+    return [blocked, others];
+  }
+  function choose(rb, blocked, others, pings) {
+    if (!active(rb)) { rb.mode = "off"; return -1; }
+    const free = nbrs(rb.pos).filter((n) => rb.known[n] === 0), opts = free.filter((n) => !blocked.has(n));
+    if (rb.stuck >= DEADLOCK && opts.length) { rb.mode = "deadlock"; return opts[Math.floor(S.rand() * opts.length)]; }
+    if (pings.length) {
+      const set = new Set(pings), s = bfsStep((i) => rb.known[i] !== 1, rb.pos, (i) => set.has(i), blocked);
+      if (s >= 0 && rb.known[s] === 0) { rb.mode = "ping"; return s; }
+    }
+    if (free.some((n) => !rb.seen[n])) {
+      if (!opts.length) { rb.mode = "blocked"; return -1; }
+      rb.mode = "pheromone"; let best = -1, bestScore = Infinity;
+      for (const n of opts) {
+        let crowd = 0; for (const o of others) crowd += 1 / (1 + man(n, o));
+        const score = WP * rb.trail[n] + WS * crowd + RND * S.rand();
+        if (score < bestScore) { bestScore = score; best = n; }
+      }
+      return best;
+    }
+    let frontier = false;
+    for (let i = 0; i < N * N; i++) if (rb.known[i] === 0 && !rb.seen[i]) { frontier = true; break; }
+    if (!frontier) { rb.mode = "idle"; return -1; }
+    const s = bfsStep((i) => rb.known[i] === 0, rb.pos, (i) => rb.known[i] === 0 && !rb.seen[i], blocked);
+    if (s >= 0) { rb.mode = "reroute"; return s; }
+    rb.mode = "blocked"; return -1;
+  }
+  function commit(rb, m) {
+    if (m < 0) { if (rb.mode === "blocked") rb.stuck++; else if (rb.mode === "idle" || rb.mode === "off") rb.stuck = 0; return; }
+    rb.pos = m; rb.battery--; rb.moves++; rb.trail[m] += 1; rb.seen[m] = 1; rb.stuck = 0;
+  }
+  function record() {
+    for (const rb of S.robots) {
+      S.visited[rb.pos] = 1;
+      for (const sv of S.survivors) if (!sv.found && sv.cell === rb.pos) {
+        sv.found = true;
+        if (S.first === null) { S.first = S.tick; announce(`First survivor found at tick ${S.tick}.`); }
+        else announce(`Survivor found at tick ${S.tick}.`);
+      }
+    }
+  }
+  function coverage() {
+    let v = 0, t = 0; for (let i = 0; i < N * N; i++) if (S.reach[i]) { t++; v += S.visited[i]; }
+    return t ? v / t : 1;
+  }
+  function step() {
+    if (!S || S.done) return;
+    S.tick++;
+    for (const rb of S.robots) if (rb.alive) sense(rb);
+    shareTrails();
+    const prev = S.robots.map((r) => r.pos), occ = new Set(prev), pingsOn = $("pings").checked;
+    for (const rb of S.robots) {
+      const [blocked, others] = perceive(rb);
+      const pings = pingsOn && active(rb) ? S.survivors.filter((s) => !s.found && man(s.cell, rb.pos) <= PING_RANGE).map((s) => s.cell) : [];
+      let m = choose(rb, blocked, others, pings);
+      if (m >= 0 && (S.grid[m] !== 0 || occ.has(m))) { S.trips++; rb.mode = "blocked"; m = -1; } // safety interlock
+      if (m >= 0) { occ.delete(rb.pos); occ.add(m); }
+      commit(rb, m);
+    }
+    // Collision audit: shared cells, robots in debris, head-on swaps.
+    const pos = S.robots.map((r) => r.pos);
+    S.collisions += pos.length - new Set(pos).size + pos.filter((p) => S.grid[p] !== 0).length;
+    for (let i = 0; i < pos.length; i++) for (let j = i + 1; j < pos.length; j++)
+      if (pos[i] === prev[j] && pos[j] === prev[i] && pos[i] !== prev[i]) S.collisions++;
+    record();
+    const cov = coverage(), allFound = S.survivors.every((s) => s.found);
+    const idle = S.robots.every((r) => !active(r) || r.mode === "idle");
+    if (S.tick >= MAX_TICKS || idle || (cov >= 1 && allFound)) {
+      S.done = true; stop();
+      announce(`Mission complete at tick ${S.tick}: ${Math.round(cov * 100)}% coverage, ${S.survivors.filter((s) => s.found).length} of ${SURVIVORS} survivors found, ${S.collisions} collisions.`);
+    }
+    render();
+  }
+  function aftershock() {
+    if (!S || S.shocked) return;
+    S.shocked = true;
+    const protect = new Set([...S.robots.map((r) => r.pos), ...S.survivors.map((s) => s.cell)]);
+    const free = []; for (let i = 0; i < N * N; i++) if (S.grid[i] === 0 && !protect.has(i)) free.push(i);
+    for (let k = 0; k < Math.min(NEW_DEBRIS, free.length); k++) {
+      const j = k + Math.floor(S.rand() * (free.length - k)); [free[k], free[j]] = [free[j], free[k]];
+      S.grid[free[k]] = 1; S.shockCells.add(free[k]);
+    }
+    S.robots[0].alive = false; S.robots[0].mode = "off"; S.radio = false;
+    // Recompute reachable area: connected to a working robot (failed robot = obstacle) plus cells already searched.
+    const pass = S.grid.map((v) => (v === 0 ? 1 : 0)); pass[S.robots[0].pos] = 0;
+    const d = bfsDist(pass, S.robots.filter((r) => r.alive).map((r) => r.pos));
+    for (let i = 0; i < N * N; i++) S.reach[i] = d[i] >= 0 || (S.visited[i] && S.grid[i] === 0) ? 1 : 0;
+    S.done = false;
+    $("shock").disabled = true;
+    announce(`Aftershock at tick ${S.tick}: ${NEW_DEBRIS} debris cells fell, robot 0 failed and the radio link is down. The remaining robots sense the debris and reroute.`);
+    render();
+  }
+
+  function render() {
+    const size = canvas.width, cs = size / N;
+    ctx.clearRect(0, 0, size, size);
+    for (let i = 0; i < N * N; i++) {
+      const x = col(i) * cs, y = row(i) * cs;
+      ctx.fillStyle = S.shockCells.has(i) ? COL.shock : S.grid[i] ? COL.debris : S.visited[i] ? COL.seen : COL.free;
+      ctx.fillRect(x, y, cs, cs);
+      if (S.shockCells.has(i)) {
+        ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath();
+        ctx.moveTo(x + cs * 0.25, y + cs * 0.25); ctx.lineTo(x + cs * 0.75, y + cs * 0.75);
+        ctx.moveTo(x + cs * 0.75, y + cs * 0.25); ctx.lineTo(x + cs * 0.25, y + cs * 0.75); ctx.stroke();
+      }
+    }
+    ctx.strokeStyle = "rgba(255,255,255,.6)"; ctx.lineWidth = 1;
+    for (let k = 0; k <= N; k++) { ctx.beginPath(); ctx.moveTo(k * cs, 0); ctx.lineTo(k * cs, size); ctx.moveTo(0, k * cs); ctx.lineTo(size, k * cs); ctx.stroke(); }
+    for (const sv of S.survivors) {
+      const cx = (col(sv.cell) + 0.5) * cs, cy = (row(sv.cell) + 0.5) * cs, r = cs * 0.45;
+      ctx.beginPath();
+      if (sv.found) for (let k = 0; k < 10; k++) { const a = -Math.PI / 2 + (k * Math.PI) / 5, rr = k % 2 ? r * 0.45 : r; ctx.lineTo(cx + rr * Math.cos(a), cy + rr * Math.sin(a)); }
+      else { ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r, cy + r * 0.8); ctx.lineTo(cx - r, cy + r * 0.8); }
+      ctx.closePath(); ctx.fillStyle = sv.found ? COL.found : COL.missing; ctx.fill(); ctx.strokeStyle = "#000"; ctx.lineWidth = 1; ctx.stroke();
+    }
+    for (const rb of S.robots) {
+      const cx = (col(rb.pos) + 0.5) * cs, cy = (row(rb.pos) + 0.5) * cs;
+      if (rb.alive) {
+        ctx.beginPath(); ctx.arc(cx, cy, cs * 0.42, 0, 2 * Math.PI); ctx.fillStyle = COL.robot; ctx.fill();
+        ctx.strokeStyle = "#000"; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.fillStyle = "#000"; ctx.font = `bold ${Math.round(cs * 0.5)}px system-ui,sans-serif`;
+        ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(rb.id), cx, cy + 1);
+      } else {
+        const r = cs * 0.38; ctx.strokeStyle = COL.failed; ctx.lineWidth = cs * 0.2; ctx.beginPath();
+        ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r); ctx.moveTo(cx + r, cy - r); ctx.lineTo(cx - r, cy + r); ctx.stroke();
+      }
+    }
+    const cov = coverage(), found = S.survivors.filter((s) => s.found).length;
+    const energy = S.robots.reduce((a, r) => a + r.moves, 0);
+    $("m-tick").textContent = S.tick; $("m-cov").textContent = `${(cov * 100).toFixed(1)}%`;
+    $("m-surv").textContent = `${found} / ${SURVIVORS}`; $("m-col").textContent = S.collisions;
+    $("m-first").textContent = S.first === null ? "–" : `tick ${S.first}`; $("m-energy").textContent = energy;
+    $("m-radio").textContent = S.radio ? "online" : "lost"; $("m-seed").textContent = seed;
+    const robots = S.robots.map((r) => `robot ${r.id} at row ${row(r.pos)} column ${col(r.pos)}${r.alive ? "" : " (failed)"}`).join("; ");
+    canvas.setAttribute("aria-label", `Disaster zone map, tick ${S.tick}: ${Math.round(cov * 100)}% of reachable area searched, ${found} of ${SURVIVORS} survivors found. ${robots}.`);
+  }
+  function announce(text) { $("status").textContent = text; }
+  function stop() { clearTimeout(timer); timer = null; $("play").textContent = "Play"; $("play").setAttribute("aria-pressed", "false"); }
+  function loop() { step(); if (timer !== null && !S.done) timer = setTimeout(loop, 1000 / +$("speed").value); }
+  function play() {
+    if (timer !== null) { stop(); return; }
+    if (S.done) return;
+    $("play").textContent = "Pause"; $("play").setAttribute("aria-pressed", "true"); timer = 0; loop();
+  }
+  function reset(next) { stop(); if (next) seed = (seed % 9999) + 1; newMission(); render(); }
+
+  $("play").addEventListener("click", play);
+  $("step").addEventListener("click", () => { stop(); step(); });
+  $("shock").addEventListener("click", aftershock);
+  $("reset").addEventListener("click", () => reset(true));
+  $("robots").addEventListener("change", () => reset(false));
+  reset(false);
+  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) play();
+})();
+</script>
+</body>
+</html>
