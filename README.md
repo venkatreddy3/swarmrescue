@@ -2,11 +2,30 @@
 
 **Decentralized Ant-Pheromone Multi-Robot Exploration for Disaster Zone Search & Rescue**
 
-After an earthquake, a swarm of robots enters a collapsed building and must cover every reachable
-cell to find trapped survivors. There is no central controller: each robot decides its own next
-move from what it senses and what it hears from nearby teammates. Particle Swarm Optimisation (PSO)
-tunes the behaviour weights, and a rule-based Mission Advisor turns the results into plain-English
-advice for the human operator.
+After an earthquake, a swarm of rescue robots enters a collapsed building and must search every
+reachable cell to find trapped survivors. There is no central controller: each robot decides its
+next move from its own sensors, a digital **pheromone trail** of cells already searched, trails
+shared over a short-range **radio link**, and the **acoustic pings** of survivors it can hear.
+Particle Swarm Optimisation (PSO) tunes the behaviour weights, and a rule-based **Mission Advisor**
+turns the results into plain-English advice for the human operator.
+
+![Live web demo after an aftershock: robot 0 has failed (vermillion X), new debris is grey with a white x, and the remaining robots keep searching](docs/web-demo.png)
+
+---
+
+## Demo
+
+| | Link | Notes |
+|---|---|---|
+| **Primary demo (loads instantly)** | **Vercel:** `https://YOUR-PROJECT.vercel.app` *(replace with the deployed URL)* | [`web/index.html`](web/index.html) is a single 25 KB page with a live JavaScript port of the swarm, an **Aftershock** button, live metrics and the real results table. It makes no network requests. |
+| Full Mission Control dashboard | **Streamlit:** `https://YOUR-APP.streamlit.app` *(replace with the deployed URL)* | [`app.py`](app.py) runs the Python simulator with PSO tuning and the Mission Advisor. It may take a while to wake up on a free tier, which is why the Vercel page is the primary demo. |
+| Demo video | *Coming soon: add the video link here* | |
+| Source | https://github.com/venkatreddy3/swarmrescue | |
+
+**Deploying the Vercel page:** import the repository into Vercel, set **Root Directory = `web`** and
+**Framework Preset = Other**, and leave the build command empty. [`web/vercel.json`](web/vercel.json)
+adds a strict Content-Security-Policy (hash-pinned inline script and style) and other security headers.
+To try it locally, run `python -m http.server 8765 --directory web` and open http://localhost:8765.
 
 ---
 
@@ -14,24 +33,27 @@ advice for the human operator.
 
 **Track 05: Intelligent Systems & Autonomous Computing** (OptiForge 2026).
 
-The project combines two computational-intelligence techniques:
+The project combines several computational-intelligence techniques:
 
-- **Ant Colony-style stigmergy** for decentralized, self-organising exploration.
-- **Particle Swarm Optimisation** for automatic parameter tuning.
+- **Ant Colony-style stigmergy** (pheromone trails, now with **evaporation**) for decentralized,
+  self-organising search.
+- **Particle Swarm Optimisation** for automatic parameter tuning, with an over-fitting guard.
+- **A rule-based expert system** (Mission Advisor) for explainable decision support.
 
 ---
 
 ## Problem Statement
 
-A collapsed building is modelled as an occupancy grid (`0` = free, `1` = debris/wall). `N` robots
-start at the entrance. They must:
+A collapsed building (the **disaster zone**) is modelled as an occupancy grid (`0` = free,
+`1` = debris or wall). `N` rescue robots start at the entry point. They must:
 
-1. **Cover** as much of the reachable free space as possible, as quickly as possible.
-2. **Find** trapped survivors hidden in reachable cells.
-3. **Never collide** with walls or with each other.
+1. **Achieve coverage.** Search as much of the reachable free space as possible, as quickly as possible.
+2. **Find survivors.** Locate trapped survivors hidden in reachable cells, and reach the first one fast.
+3. **Stay collision-free.** Never collide with debris or with each other.
 4. **Save energy.** Every move costs 1 battery unit, and a robot stops at 0.
-5. **Survive change.** In **Round 2**, at tick 60 an aftershock drops 25 new debris cells.
-   The robots are not told about them. Robot 0 fails permanently and the radio link goes down.
+5. **Tolerate failure.** In **Round 2**, an **aftershock** at tick 60 drops 25 new debris cells that
+   the robots are not told about. Robot 0 fails permanently and the radio link goes down. The swarm
+   must have **no single point of failure**, and robots must **reroute** around the new debris.
 
 The mission score is:
 
@@ -40,116 +62,178 @@ fitness = 100*coverage + 20*survivors_found_ratio + 20*speed - 0.01*energy_moves
 speed   = 1 - tick_at_90pct_coverage / MAX_TICKS      (0 if 90% coverage is never reached)
 ```
 
-`coverage` = visited reachable cells / reachable free cells. The reachable area is recomputed after
-the Round 2 shift.
+`coverage` = searched reachable cells / reachable free cells. The reachable area is recomputed after
+the aftershock. We also report **time-to-first-survivor** and the time until *every* survivor is found.
+
+---
+
+## SDG Alignment
+
+| UN Sustainable Development Goal | How SwarmRescue contributes |
+|---|---|
+| **SDG 9: Industry, Innovation and Infrastructure. Target 9.4:** upgrade infrastructure and industries with clean, efficient technology | Swarm robotics lets inspection and rescue work continue inside damaged infrastructure without putting people at risk. The swarm is **energy-efficient**: the fitness penalises every move, robots go idle when nothing is left to search, and PSO cuts wasted moves (Round 1: 572 → 538 moves on seeds 1–3). Decentralized control keeps working after a robot or radio failure, which makes the automation itself **resilient**. |
+| **SDG 11: Sustainable Cities and Communities. Target 11.5:** significantly reduce the number of deaths and people affected by disasters | Survival after a building collapse falls sharply with time, so the key outputs are the **time-to-first-survivor** and the **time until every survivor is found**. Acoustic pings cut the average time to reach every survivor from 103 to 66 ticks (Round 1) and from 158 to 97 ticks (Round 2), on 20 zones. **Coverage** close to 100% means no room is left unsearched, and survivors found rose from 96% to 99% in Round 2. |
+
+In short: **coverage** means no one is overlooked, **time-to-survivor** means people are reached
+sooner, and **energy use** means longer missions per battery with less hardware.
 
 ---
 
 ## Approach & Algorithmic Logic
 
-### 1. Ant-pheromone move rule (per robot, every tick)
+### 1. Ant-pheromone move rule (each robot, every tick)
 
-Each robot keeps a **private visit-count map** (its "pheromone"). It scores every free 4-neighbour
-and moves to the one with the **lowest** score:
+Each `Robot` has a private `PheromoneTrail`. It scores every free 4-neighbour and moves to the one
+with the **lowest** score:
 
 ```
-score(cell) = PHEROMONE_WEIGHT * visits[cell]
-            + SPREAD_WEIGHT    * Σ_other 1 / (1 + manhattan(cell, other))   # crowding
-            + RANDOMNESS       * U(0, 1)                                      # tie-break noise
+score(cell) = PHEROMONE_WEIGHT * pheromone[cell]
+            + SPREAD_WEIGHT    * Σ_teammates 1 / (1 + manhattan(cell, teammate))   # crowding
+            + RANDOMNESS       * U(0, 1)                                            # tie-break noise
 ```
 
-- The **pheromone** term pushes robots away from cells that have already been searched. This is the
-  ant-colony idea of *stigmergy* (coordinating through marks left in the environment), except that
-  the marks are digital.
+- The **pheromone** term steers robots away from cells that have already been searched. This is
+  ant-colony *stigmergy*: coordinating through marks left in the environment.
 - The **crowding** term pushes robots apart so they fan out into different rooms.
-- The **noise** term breaks symmetric ties so robots don't move in lock-step.
+- The **noise** term breaks symmetric ties.
 
-### 2. BFS fallback
+### 2. BFS reroute
 
-If **all** neighbours have already been visited, the robot runs **Breadth-First Search** over its
-own known-free cells to the **nearest unvisited** one and takes the first step. BFS on an unweighted
-grid gives true shortest paths (checked by a test against an independent Bellman-Ford computation).
-Perceived teammates are treated as obstacles, so the planner routes around them. When a robot's
-belief contains no unvisited cells, it goes **idle** to save battery.
+If every neighbour has already been searched, the robot runs **breadth-first search** over its own
+known-free cells to the **nearest unsearched** cell and takes the first step. On an unweighted grid,
+BFS returns a true shortest path; a test checks this against an independent Bellman-Ford computation.
+Teammates the robot can perceive count as obstacles, so it reroutes around them. When nothing is left
+to search in its belief, the robot goes **idle** to save battery.
 
-### 3. Safety and robustness
+### 3. Adaptive feature A: pheromone evaporation (`use_evaporation`, `EVAPORATION_RATE`)
 
-- **Collision-free by construction.** Robots move one at a time within a tick. A robot never enters
-  a wall or a cell that is occupied or already claimed this tick, including cells held by failed
-  robots. Because of this, two robots can never swap places either. The simulator also has an
-  independent hardware interlock and audits every tick for shared cells, robots inside walls and
-  head-on swaps.
-- **Deadlock breaker.** If a robot has been blocked for 3 ticks, it takes a random free neighbour.
-- **Sensing and replanning.** Every tick, each robot scans its surroundings within `SENSE_RANGE`
-  (a square window). Debris that falls on a route the robot already knows is detected the next time
-  the robot is nearby. The robot replans at once, because BFS runs again on the updated belief map.
-- **Battery.** Each move costs 1, and a robot stops permanently at 0.
+Real ant trails fade over time. With evaporation on, each robot's trail decays every tick:
+`pheromone *= (1 − EVAPORATION_RATE)`. The robot still remembers which cells it has searched. There
+are two effects:
 
-### 4. Decentralization
+- The pheromone score prefers cells searched **long ago** over cells searched recently.
+- An idle robot **patrols** back to *stale* cells, meaning searched cells whose pheromone has
+  dropped below 0.05, instead of standing still.
 
-- Every robot owns its own `known` map (`-1` unknown / `0` free / `1` wall) and its own `visits` map.
-  It never reads the ground-truth grid, only its sensor window.
-- **Peer-to-peer sharing.** Robots within `COMM_RANGE` (Manhattan) merge both maps with `np.maximum`.
-  This works because walls only ever appear: wall beats free, free beats unknown, and the higher visit
-  count wins. Sharing is single-hop and uses a snapshot, so the result doesn't depend on the order
-  robots are processed in.
-- A robot only perceives teammates within `COMM_RANGE`. After the radio fails in Round 2, it only
-  perceives teammates within 2 cells, using proximity sensors, and no maps are shared.
+`EVAPORATION_RATE` is added to the PSO search space (range 0–0.2) when the flag is on. It is **off by
+default**. On its own it is roughly neutral: Round 2 fitness went 117.63 → 117.80 on 20 zones.
+Combined with PSO it gave the **best Round 2 result on unseen maps** (121.03; see Results).
 
-### 5. PSO tuning
+### 4. Adaptive feature B: survivor acoustic pings (`use_pings`, `PING_RANGE`)
 
-PSO searches `PHEROMONE_WEIGHT ∈ [0,3]`, `SPREAD_WEIGHT ∈ [0,3]` and `RANDOMNESS ∈ [0,1]`:
-8 particles, 12 iterations, inertia 0.6, c1 = c2 = 1.5. Velocity is clamped to 20% of each range.
-The objective is the **fitness averaged over seeds 1, 2 and 3** (three different buildings), so the
-weights aren't over-fitted to a single map. Particle 0 starts at the hand-set defaults, so the tuned
-result can never be worse than the baseline on the tuning seeds. The global-best history is
-monotone, which is also tested. A convergence line is printed every iteration.
+Trapped survivors tap on debris or have a phone signal. Each unfound survivor emits a ping that a
+robot within `PING_RANGE` (Manhattan distance; sound passes through rubble) can hear. A robot that
+hears a ping **gives it priority**. It plans a BFS route to the source that treats unknown cells as
+passable and avoids known debris. Its first step is always a known-free cell that no one occupies, so
+movement stays collision-free. The sensor corrects the plan as the robot moves. **On by default**
+(range 4). The metric **`first_survivor_tick`** (time-to-first-survivor) is reported everywhere.
+
+### 5. Safety and robustness
+
+- **Collision-free by construction.** Robots move one at a time within each tick. A robot never enters
+  debris or a cell that is occupied or already claimed, including a failed robot's cell. So two robots
+  can never swap places. `MissionControl` also runs an independent safety interlock and audits every
+  tick for shared cells, robots on debris and head-on swaps.
+- **Deadlock breaker.** A robot blocked for 3 ticks takes a random free neighbour.
+- **Reroute after debris.** Each robot scans its surroundings within `SENSE_RANGE` every tick. Debris
+  that fell on a known route is found as soon as the robot is nearby, and BFS reroutes immediately.
+- **Energy and battery.** Each move costs 1, and a robot stops permanently at 0.
+
+### 6. Decentralization: no single point of failure
+
+- Each robot owns its own `known` map and `PheromoneTrail`. It never reads the ground truth, only its
+  sensor window.
+- **`RadioLink`.** Robots within `COMM_RANGE` merge trails and debris maps with an element-wise
+  maximum. Merging is single-hop and order-independent. After the aftershock cuts the radio, robots
+  only perceive teammates within 2 cells and no longer share maps.
+- `MissionControl` is only the simulator and observer: it owns the clock, the ground truth and the
+  audit. It never sends a robot an order.
+
+### 7. PSO tuning with an over-fitting guard
+
+PSO searches `PHEROMONE_WEIGHT ∈ [0,3]`, `SPREAD_WEIGHT ∈ [0,3]` and `RANDOMNESS ∈ [0,1]`, plus
+`EVAPORATION_RATE ∈ [0,0.2]` when evaporation is on. It uses 8 particles, 12 iterations, inertia 0.6
+and c1 = c2 = 1.5. Fitness is **averaged over seeds 1, 2 and 3**. Particle 0 starts at the defaults,
+so the best-fitness history never goes down; a test checks this.
+
+**New in Attempt 2:** the CLI re-evaluates the tuned weights on **10 held-out maps** (seeds 101–110).
+It only recommends them if held-out fitness does not drop (`main.generalizes`).
 
 ### Why these CI techniques?
 
 | Need | Technique | Why it fits |
 |---|---|---|
-| Explore without a leader, survive robot or radio loss | Ant-colony stigmergy | Purely local rules produce global coverage, and losing one robot or the radio link degrades performance gradually instead of breaking the mission |
-| Fill gaps when local marks run out | BFS | Optimal (shortest) on unweighted grids, and fast enough to rerun every tick for instant replanning |
-| Tune 3 continuous weights with a noisy, non-differentiable, simulation-based objective | PSO | Gradient-free, needs no model of the objective, works with few evaluations, and is itself a swarm-intelligence method |
-| Explainable operator guidance with no network or API keys | Rule-based expert system | Deterministic, auditable, works offline in the field |
+| Search without a leader, survive robot or radio loss | Ant-colony stigmergy + evaporation | Local rules produce global coverage, and losing a robot degrades performance gradually instead of stopping the mission. Evaporation lets old information fade. |
+| Fill gaps when local marks run out, reroute around new debris | BFS | Gives the shortest path on unweighted grids, and is cheap enough to rerun every tick |
+| Reach survivors sooner | Acoustic-ping homing | Turns a weak, long-range cue into a direct route to the person |
+| Tune continuous weights for a noisy, simulation-based objective | PSO | Needs no gradients or model of the objective, and is itself a swarm-intelligence method |
+| Explainable operator guidance offline | Rule-based expert system | Deterministic, auditable, and needs no network or API keys |
 
 ---
 
-## How It Works End-to-End
+## Architecture
 
+```mermaid
+flowchart LR
+    subgraph Inputs
+        CFG["SwarmConfig<br/>(frozen, validated)"]
+        ENV[".env / environment<br/>settings.py (bounded)"]
+    end
+    subgraph Core["swarmrescue package"]
+        DZ["world.py<br/>DisasterZone · Survivor · Debris · Aftershock"]
+        RB["agent.py<br/>Robot · PheromoneTrail · BFS reroute"]
+        RL["coordination.py<br/>RadioLink · perceive_teammates"]
+        MC["simulation.py<br/>MissionControl · fitness · collision audit"]
+        PSO["optimizer.py<br/>PSO + search_space()"]
+        ADV["advisor.py<br/>MissionAdvisor"]
+    end
+    subgraph Interfaces
+        CLI["main.py<br/>CLI report"]
+        ST["app.py<br/>Streamlit Mission Control"]
+        WEB["web/index.html<br/>Vercel live demo (JS port)"]
+    end
+    CFG --> MC
+    ENV --> CLI
+    ENV --> ST
+    DZ --> MC
+    RB --> MC
+    RL --> MC
+    MC --> PSO
+    PSO --> ADV
+    MC --> ADV
+    ADV --> CLI
+    ADV --> ST
+    MC --> CLI
+    MC --> ST
 ```
-           ┌─────────────────────── config.py (frozen SwarmConfig + validation) ─────────────────────┐
-           ▼                                                                                          │
-   world.py: random collapsed building ──► starts at entrance, survivors in reachable cells           │
-           │                                                                                          │
-           ▼          ┌──────────────────────── one tick (simulation.py) ────────────────────────┐   │
-   ┌──────────────┐   │ [Round 2 @ tick 60: +25 debris, robot 0 fails, radio off, recompute reach]│   │
-   │ Agent 0..N-1 │──►│ 1. sense walls in SENSE_RANGE        (agent.py)                           │   │
-   │ known map    │   │ 2. share maps with peers in range    (coordination.py, np.maximum)       │   │
-   │ visits map   │   │ 3. each robot in turn: perceive neighbours → choose_move                  │   │
-   │ battery      │   │      pheromone score ─► BFS fallback ─► deadlock breaker ─► idle          │   │
-   └──────────────┘   │ 4. safety interlock, move, battery−1, collision audit, coverage, survivors│   │
-                      └───────────────────────────────┬───────────────────────────────────────────┘   │
-                                                      ▼                                               │
-                              SimulationResult (coverage, t@90%, energy, collisions, latency, fitness)│
-                                          │                          │                                │
-                                          ▼                          ▼                                │
-                             optimizer.py: PSO over seeds 1,2,3 ─────┴──► tuned weights ──────────────┘
-                                          │
-                                          ▼
-                             advisor.py: rules → plain-English recommendations
-                                          │
-                        ┌─────────────────┴──────────────────┐
-                        ▼                                    ▼
-                 main.py (CLI report)             app.py (Streamlit Mission Control)
+
+## End-to-End Flow
+
+```mermaid
+flowchart TD
+    A["Operator sets mission<br/>(CLI flags / dashboard / web page)"] --> B["Validate inputs<br/>(bounded argparse, SwarmConfig)"]
+    B --> C["Generate DisasterZone<br/>entry cells + trapped survivors"]
+    C --> D{"Tick t"}
+    D -->|"Round 2 and t = 60"| E["Aftershock: +25 debris,<br/>robot 0 fails, RadioLink cut,<br/>recompute reachable area"]
+    E --> F
+    D --> F["Each robot senses debris<br/>(reroute if a route is blocked)"]
+    F --> G["Evaporate trails (optional)<br/>RadioLink shares trails in range"]
+    G --> H["Each robot in turn:<br/>deadlock breaker → survivor ping → pheromone rule<br/>→ BFS reroute → patrol → idle"]
+    H --> I["Safety interlock + collision audit<br/>battery −1 per move"]
+    I --> J["Update coverage, survivors found,<br/>time-to-first-survivor, latency"]
+    J -->|"not done"| D
+    J -->|"done"| K["SimulationResult + fitness"]
+    K --> L["PSO tuning (optional)<br/>+ held-out over-fitting guard"]
+    L --> M["MissionAdvisor<br/>plain-English recommendations"]
+    K --> M
+    M --> N["Report: CLI table · dashboard · web page"]
 ```
 
 ---
 
 ## How to Run
 
-Requires Python 3.10+ (developed on 3.13).
+Requires Python 3.11+ (developed on 3.13).
 
 ```bash
 pip install -r requirements.txt
@@ -158,33 +242,43 @@ pip install -r requirements.txt
 **CLI**
 
 ```bash
-python main.py --round 1                 # static building, seeds 1 2 3
-python main.py --round 2                 # aftershock + robot failure + radio loss
-python main.py --round 1 --tune          # PSO tuning + before/after + held-out check
-python main.py --round 2 --tune --seeds 1 2 3 --eval-seeds 101 102 103
+python main.py --round 1                      # static building, seeds 1 2 3
+python main.py --round 2                      # aftershock + robot failure + radio loss
+python main.py --round 2 --tune               # PSO + before/after + held-out over-fitting check
+python main.py --round 2 --evaporation --tune # also tune EVAPORATION_RATE
+python main.py --round 2 --no-pings           # Attempt 1 behaviour (no acoustic pings)
 python main.py --agents 6 --battery 150 --wall-density 0.25 --priority speed
+python scripts/ablation.py                    # pings / evaporation ablation on 20 zones
 ```
 
-**Tests** (90 tests, about 20 s)
+Every numeric flag is range-checked. For example, `--agents 0`, `--particles 999` and
+`--wall-density nan` are rejected with exit code 2.
+
+**Optional settings.** Copy [`.env.example`](.env.example) to `.env` to change `SWARM_SEED` (the
+default seeds) or `LOG_LEVEL`. No secrets are needed anywhere; see [SECURITY.md](SECURITY.md).
+
+**Tests** (148 tests, about 15 s)
 
 ```bash
 python -m pytest
 ```
 
-**Dashboard**
+**Streamlit dashboard**
 
 ```bash
 streamlit run app.py
 ```
 
-In the sidebar, the operator sets the scenario (Round 1 or 2), number of robots, building size,
-debris density, battery, survivors, time limit, seed and priority. The **Behaviour weights** section
-also has manual weight sliders. The main view shows the map (tick slider and *Play animation*),
-metrics, a coverage-over-time chart, a PSO convergence chart with an *Apply tuned weights* button,
-and the Mission Advisor.
+**Web demo locally**
 
-Accessibility: the map uses the colour-blind-safe **Okabe-Ito** palette, and every element also has
-a distinct **shape**:
+```bash
+python -m http.server 8765 --directory web
+```
+
+![Streamlit dashboard map, Round 2 at tick 100: shapes and a text legend distinguish robots, the failed robot, found and missing survivors, and aftershock debris](docs/dashboard-map.png)
+
+**Accessibility.** Both the dashboard and the web page use the colour-blind-safe **Okabe-Ito**
+palette, and every element also has a distinct **shape** and a text legend:
 
 | Element | Shape | Colour |
 |---|---|---|
@@ -192,96 +286,138 @@ a distinct **shape**:
 | Failed robot | X | vermillion |
 | Survivor found | star | green |
 | Survivor not yet found | triangle | purple |
-| New Round 2 debris | grey cell with an "x" | grey |
+| Aftershock debris | grey cell with a white "x" | grey |
 
-A text legend explains all of these. Under the map, a plain-text summary lists the tick, coverage,
-survivors found and every robot's position, for screen readers. Every control has a descriptive label.
+The web page also provides:
+- semantic landmarks and a skip link;
+- keyboard-operable `<button>`s with visible focus and at least 44 px targets;
+- labelled controls;
+- a canvas `aria-label` that describes the map in text, updated every tick;
+- an `aria-live` status line for key events;
+- light and dark themes;
+- `prefers-reduced-motion`: the animation does not start automatically.
 
 ---
 
 ## Results
 
-These are real outputs of `python main.py --round N --tune` with the default configuration
-(Windows 11, Python 3.13). Everything is seeded, so all metrics except wall-clock latency are
-reproducible.
+These are real outputs of `python main.py --round N --tune` and `python scripts/ablation.py` with the
+default configuration (Windows 11, Python 3.13). Everything is seeded, so all metrics except
+wall-clock latency are reproducible.
 
-### Round 1: static building
+### Attempt 2 defaults (pings on, evaporation off), seeds 1–3
 
-| Seed | Coverage | Survivors | Tick @ 90% | Energy | Collisions | Fitness (default → tuned) |
+| Round | Weights | Coverage | Survivors | 1st survivor (tick) | 90% coverage (tick) | Energy | Collisions | Fitness |
+|---|---|---|---|---|---|---|---|---|
+| 1 | default | 1.000 | 15/15 | 21.3 | 110 | 572 | 0 | **126.950** |
+| 1 | PSO-tuned | 1.000 | 15/15 | 16.7 | 98 | 538 | 0 | **128.061** |
+| 2 | default | 0.967 | 15/15 | 21.3 | 175 | 807 | 0 | **116.937** |
+| 2 | PSO-tuned | 0.998 | 15/15 | 17.7 | 133 | 792 | 0 | **123.016** |
+
+Per seed (default → tuned):
+
+| Round | Seed | Coverage | 1st survivor | 90% coverage | Energy | Fitness |
 |---|---|---|---|---|---|---|
-| 1 | 1.000 | 5/5 | 118 → 110 | 582 → 562 | 0 | 126.313 → 127.047 |
-| 2 | 1.000 | 5/5 | 95 → 91 | 619 → 559 | 0 | 127.477 → 128.343 |
-| 3 | 1.000 | 5/5 | 101 → 95 | 578 → 491 | 0 | 127.487 → 128.757 |
-| **Mean** | **1.000** | **100%** | **105 → 99** | **593 → 537** | **0** | **127.092 → 128.049** |
+| 1 | 1 | 1.000 → 1.000 | 18 → 14 | 106 → 105 | 599 → 566 | 126.943 → 127.340 |
+| 1 | 2 | 1.000 → 1.000 | 8 → 8 | 101 → 95 | 515 → 555 | 128.117 → 128.117 |
+| 1 | 3 | 1.000 → 1.000 | 38 → 28 | 123 → 95 | 601 → 494 | 125.790 → 128.727 |
+| 2 | 1 | 0.993 → 0.997 | 18 → 21 | 152 → 125 | 806 → 808 | 121.153 → 123.260 |
+| 2 | 2 | 0.957 → 0.997 | 8 → 8 | 225 → 149 | 808 → 808 | 112.572 → 121.653 |
+| 2 | 3 | 0.951 → 1.000 | 38 → 24 | 149 → 124 | 808 → 760 | 117.085 → 124.133 |
 
-Tuned weights: `pheromone_weight=2.173, spread_weight=0.579, randomness=0.636`.
-PSO took 23.8 s. Max decision latency was ≤ 2.3 ms per tick for the whole swarm.
+Tuned weights: Round 1 `pheromone=1.085, spread=1.254, randomness=0.721`; Round 2
+`pheromone=0.527, spread=2.590, randomness=0.541`. Each PSO run takes about 15 s. The maximum decision
+latency for the whole swarm is usually 1–4 ms per tick. One run had a 19.6 ms Windows scheduling spike,
+still under the 50 ms budget, which a test also checks.
+
+Convergence log excerpts (verbatim):
 
 ```
-[PSO] iter  0 | best  127.532 | swarm mean  125.545 | pheromone_weight=2.572, spread_weight=0.101, randomness=0.730
-[PSO] iter  2 | best  127.751 | swarm mean  127.258 | pheromone_weight=2.671, spread_weight=1.248, randomness=0.403
-[PSO] iter  3 | best  128.049 | swarm mean  127.207 | pheromone_weight=2.173, spread_weight=0.579, randomness=0.636
-...
-[PSO] iter 12 | best  128.049 | swarm mean  127.595 | pheromone_weight=2.173, spread_weight=0.579, randomness=0.636
+# Round 1
+[PSO] iter  0 | best  126.950 | swarm mean  124.656 | pheromone_weight=1.000, spread_weight=0.500, randomness=0.100
+[PSO] iter  2 | best  128.049 | swarm mean  126.930 | pheromone_weight=1.010, spread_weight=1.480, randomness=0.593
+[PSO] iter 10 | best  128.061 | swarm mean  127.357 | pheromone_weight=1.085, spread_weight=1.254, randomness=0.721
+[PSO] iter 12 | best  128.061 | swarm mean  127.485 | pheromone_weight=1.085, spread_weight=1.254, randomness=0.721
+# Round 2 (a random initial particle was already best)
+[PSO] iter  0 | best  123.016 | swarm mean  115.364 | pheromone_weight=0.527, spread_weight=2.590, randomness=0.541
+[PSO] iter 12 | best  123.016 | swarm mean  119.165 | pheromone_weight=0.527, spread_weight=2.590, randomness=0.541
 ```
 
-Held-out seeds 101–110 (10 maps never seen by PSO): fitness **127.289 → 127.331**. Coverage and
-survivors stayed at 100%, energy dropped 580.4 → 560.9, and ticks to 90% went 103.6 → 105.9.
-Round 1 is already near its ceiling, so tuning mainly saves energy.
+**Over-fitting check (held-out seeds 101–110).** With pings on, the tuned weights **did not
+generalize**. Held-out fitness went 127.180 → 126.955 (Round 1) and 120.258 → 118.212 (Round 2).
+The CLI's new over-fitting guard therefore keeps the default weights and does not recommend the
+tuned ones:
 
-### Round 2: aftershock + robot 0 failure + radio loss at tick 60
+```
+Over-fitting guard: tuned weights score lower on held-out maps, so the advisor keeps the default weights.
+```
 
-| Seed | Coverage | Survivors | Tick @ 90% | Energy | Collisions | Fitness (default → tuned) |
+### Innovation ablation: 20 disaster zones (`python scripts/ablation.py`)
+
+**Round 1**
+
+| Variant | Coverage | Survivors | 1st survivor | All survivors found | 90% coverage | Energy | Collisions | Fitness |
+|---|---|---|---|---|---|---|---|---|
+| Attempt 1 baseline (no pings, no evaporation) | 1.000 | 100.0% | 16.5 | 103.2 | 103.4 | 561 | 0 | 127.49 |
+| + evaporation only (rate 0.01) | 1.000 | 100.0% | 16.5 | 101.2 | 102.8 | 565 | 0 | 127.49 |
+| **+ acoustic pings (default)** | 1.000 | 100.0% | **11.3** | **65.7** | 107.0 | 579 | 0 | 127.08 |
+| + pings + evaporation | 1.000 | 100.0% | 11.3 | 65.7 | 106.6 | 580 | 0 | 127.09 |
+
+**Round 2 (aftershock)**
+
+| Variant | Coverage | Survivors | 1st survivor | All survivors found | 90% coverage | Energy | Collisions | Fitness |
+|---|---|---|---|---|---|---|---|---|
+| Attempt 1 baseline (no pings, no evaporation) | 0.969 | 96.0% | 16.5 | 157.8 | 159.6 | 783 | 0 | 117.63 |
+| + evaporation only (rate 0.01) | 0.969 | 97.0% | 16.5 | 159.3 | 161.0 | 780 | 0 | 117.80 |
+| **+ acoustic pings (default)** | **0.980** | **99.0%** | **11.3** | **97.0** | 153.3 | 790 | 0 | **119.65** |
+| + pings + evaporation | 0.975 | 98.0% | 11.3 | 94.7 | 154.2 | 795 | 0 | 118.89 |
+
+**Round 2 on held-out seeds 101–110** (from the `--tune` runs):
+
+| Variant | Coverage | Survivors | 1st survivor | 90% coverage | Energy | Fitness |
 |---|---|---|---|---|---|---|
-| 1 | 0.993 → 0.997 | 5/5 | 127 → 135 | 806 → 806 | 0 | 122.804 → 122.611 |
-| 2 | 0.970 → 0.959 | 5/5 | 118 → 110 | 808 → 808 | 0 | 121.033 → 120.519 |
-| 3 | 0.974 → 1.000 | 5/5 | 183 → 125 | 808 → 655 | 0 | 117.106 → 125.117 |
-| **Mean** | **0.979 → 0.985** | **100%** | **143 → 123** | **807 → 756** | **0** | **120.314 → 122.749** |
-
-Tuned weights: `pheromone_weight=0.522, spread_weight=0.984, randomness=0.394`.
-PSO took 21.9 s. Max decision latency was ≤ 12.4 ms (one Windows scheduling spike; typically < 1 ms).
-
-```
-[PSO] iter  0 | best  121.362 | swarm mean  112.671 | pheromone_weight=2.805, spread_weight=2.448, randomness=0.003
-[PSO] iter  1 | best  121.502 | swarm mean  118.495 | pheromone_weight=0.973, spread_weight=2.555, randomness=0.447
-[PSO] iter  3 | best  122.410 | swarm mean  119.792 | pheromone_weight=0.902, spread_weight=1.171, randomness=0.478
-[PSO] iter  4 | best  122.749 | swarm mean  117.396 | pheromone_weight=0.522, spread_weight=0.984, randomness=0.394
-...
-[PSO] iter 12 | best  122.749 | swarm mean  117.064 | pheromone_weight=0.522, spread_weight=0.984, randomness=0.394
-```
-
-Held-out seeds 101–110:
-
-| Metric | Default | Tuned |
-|---|---|---|
-| Coverage | 0.973 | 0.982 |
-| Survivors found | 94% | 100% |
-| Ticks to 90% | 176.7 | 151.3 |
-| Energy | 779.3 | 783.2 |
-| Collisions | 0 | 0 |
-| **Fitness** | **116.498** | **120.318** |
-
-On unseen buildings, tuning found every survivor and reached 90% coverage about 25 ticks sooner.
-
-Mission Advisor output of `python main.py --round 2` (default weights):
-
-```
-[INFO] Robots are revisiting cells: About 2.7 moves per explored cell. Without radio, robots cannot share pheromone maps and re-search each other's areas; restoring map sharing helps most.
-[INFO] Plan for failures: Round 2 lost a robot and the radio link. Keep a spare robot in reserve and consider dropping radio relays so robots can keep sharing maps.
-[SUCCESS] Mission on track: 98% coverage, 100% of survivors found, zero collisions.
-```
-
-With `--tune`, the advisor reports on the tuned weights instead. That run shows 2.6 moves per explored
-cell and 99% coverage, and adds: `[INFO] Apply tuned weights: PSO improved mean fitness from 120.31 to 122.75.`
+| Attempt 1 (no pings), default weights | 0.973 | 94% | 13.9 | 176.7 | 779 | 116.50 |
+| Pings (Attempt 2 default), default weights | 0.982 | 100% | 8.5 | 155.4 | 762 | 120.26 |
+| Pings + evaporation 0.01, default weights | 0.985 | 100% | 8.5 | 162.5 | 778 | 119.92 |
+| **Pings + evaporation, PSO-tuned (4 params)** | 0.982 | 100% | **8.1** | **137.9** | 793 | **121.03** |
 
 **Takeaways**
 
-- There were **zero collisions** in every run. The tests also check 25 seeds × 2 rounds on a small
-  map plus 8 seeds × 2 rounds on the default map.
-- Round 2 costs about 7 fitness points: debris, one lost robot and no map sharing.
-- In Round 2, PSO learned a *lower* pheromone weight and a *higher* spread weight. Without radio,
-  robots can't see each other's pheromone, so keeping physically apart matters more than
-  a robot's own visit history.
+- **Pings are the big win for rescue.** Survivors are reached about **31% sooner on average**
+  (16.5 → 11.3 ticks for the first survivor), and **every survivor is found 36–39% sooner**. Round 2
+  survivors found rose from 96% to 99%. In Round 1, fitness drops by 0.4, because the formula doesn't
+  reward reaching people sooner, but it does charge for the extra moves.
+- **Evaporation is a context-dependent tool, not a default.** On its own it is neutral. With PSO
+  tuning the rate (`--evaporation --tune`), it gives the best Round 2 result on unseen maps (121.03)
+  and reaches 90% coverage 18 ticks sooner than pings alone.
+- **Zero collisions** in every run: 20 zones × 4 variants × 2 rounds, plus the test suite. The JS port
+  also passes a headless Node test of 16 maps with zero collisions.
+- **Honest limitation:** PSO on only 3 seeds over-fits. The guard now catches this, and the README
+  reports it rather than hiding it.
+
+Mission Advisor output of `python main.py --round 2 --tune` (after the guard):
+
+```
+[INFO] Speed up the search: 90% coverage takes about 175 ticks. More robots and a stronger spread term reach it sooner. -> try num_agents=5, spread_weight=0.8
+[INFO] Robots are revisiting cells: About 2.8 moves per explored cell. Without radio, robots cannot share pheromone maps and re-search each other's areas; restoring map sharing helps most.
+[INFO] Plan for failures: Round 2 lost a robot and the radio link. Keep a spare robot in reserve and consider dropping radio relays so robots can keep sharing maps.
+[SUCCESS] Mission on track: 97% coverage, 100% of survivors found, zero collisions.
+```
+
+<details>
+<summary>Attempt 1 results (before pings), kept for comparison</summary>
+
+| Round | Weights | Coverage | Survivors | 90% coverage | Energy | Collisions | Fitness |
+|---|---|---|---|---|---|---|---|
+| 1 | default | 1.000 | 100% | 105 | 593 | 0 | 127.092 |
+| 1 | PSO-tuned | 1.000 | 100% | 99 | 537 | 0 | 128.049 |
+| 2 | default | 0.979 | 100% | 143 | 807 | 0 | 120.314 |
+| 2 | PSO-tuned | 0.985 | 100% | 123 | 756 | 0 | 122.749 |
+
+On seeds 1–3, Round 2 default fitness was higher in Attempt 1 (120.31) than in Attempt 2 (116.94),
+because pings pull robots toward survivors on those particular maps. Across 20 zones and on the
+held-out maps, pings raise Round 2 fitness (117.63 → 119.65 and 116.50 → 120.26). We report both.
+</details>
 
 ---
 
@@ -292,77 +428,110 @@ wrongly typed values raise `ValueError`.
 
 | Parameter | Default | Valid range | Meaning |
 |---|---|---|---|
-| `grid_size` | 20 | 5–100 | Side length of the square grid |
+| `grid_size` | 20 | 5–100 | Side length of the disaster zone |
 | `wall_density` | 0.18 | 0–0.45 | Initial debris fraction |
-| `num_agents` | 4 | 1–20 | Robots |
+| `num_agents` | 4 | 1–20 | Rescue robots |
 | `num_survivors` | 5 | 0–50 | Trapped survivors |
 | `max_ticks` | 300 | 1–5000 | Mission time limit |
-| `battery` | 250 | ≥ 1 | Moves per robot |
-| `comm_range` | 5 | 1–2·grid | Manhattan radio range (map sharing, teammate perception) |
-| `sense_range` | 1 | 1–5 | Chebyshev wall-sensor radius |
-| `pheromone_weight` | 1.0 | 0–3 | Visit-count penalty (PSO-tuned) |
+| `battery` | 250 | 1–100000 | Energy (moves) per robot |
+| `comm_range` | 5 | 1–2·grid | Manhattan radio-link range |
+| `sense_range` | 1 | 1–5 | Chebyshev debris-sensor radius |
+| `pheromone_weight` | 1.0 | 0–3 | Pheromone penalty (PSO-tuned) |
 | `spread_weight` | 0.5 | 0–3 | Crowding penalty (PSO-tuned) |
 | `randomness` | 0.1 | 0–1 | Noise amplitude (PSO-tuned) |
-| `shift_tick` | 60 | ≥ 0 | Round 2 shift tick |
-| `new_walls` | 25 | 0–grid²/4 | Debris cells added at the shift |
-| `seed` | 0 | ≥ 0 | Master seed (map, survivors, noise, shift) |
+| `shift_tick` | 60 | ≥ 0 | Aftershock tick (Round 2) |
+| `new_walls` | 25 | 0–grid²/4 | Aftershock debris cells |
+| `use_evaporation` | False | bool | Pheromone evaporation on/off |
+| `evaporation_rate` | 0.01 | 0–0.2 | Pheromone fraction lost per tick (PSO-tuned when on) |
+| `use_pings` | True | bool | Survivor acoustic pings on/off |
+| `ping_range` | 4 | 1–10 | Distance at which a robot hears a survivor |
+| `seed` | 0 | ≥ 0 | Master seed (zone, survivors, noise, aftershock) |
 
-The feasibility check also requires `num_agents + num_survivors ≤ free_area / 4`.
+Environment settings (`.env`, optional): `SWARM_SEED` (0–10000, default 1) and `LOG_LEVEL`
+(DEBUG, INFO, WARNING, ERROR or CRITICAL; default WARNING).
 
 ---
 
 ## Assumptions & Operational Constraints
 
-- **Grid world.** Robots use 4-connected moves, one cell per tick, and every move costs 1 battery unit.
-- **Entrance.** Robots start at the reachable cells closest to the top-left corner. Maps whose
+- **Grid world.** Robots use 4-connected moves, one cell per tick, and each move costs 1 battery unit.
+- **Entry point.** Robots start at the reachable cells closest to the top-left corner. Zones whose
   reachable area is below 40% of the free space are regenerated.
-- **Survivors.** A survivor counts as found when a robot enters their cell. The survivor ratio is
-  measured against all survivors, including any that debris cuts off in Round 2.
-- **Sensing.** Wall sensing is perfect within the square window. Robots never see the full map.
-- **Round 2 coverage.** After the shift, the reachable area is the free cells connected to a working
-  robot (a failed robot counts as an obstacle), plus cells already visited that are still free.
-- **Communication.** Radio is single-hop within `comm_range` and has no latency or packet loss while
-  it works. After it fails, a robot only perceives teammates within 2 cells and no maps are merged.
-- **Failed robots** stay in place as permanent obstacles and never move, share or sense again.
-- **Simulator-only.** The "physical interlock" in the simulator never fired in any test. It is there
-  to mirror the bumper or safety stop a real robot would have.
+- **Survivors.** A survivor counts as found when a robot enters their cell. Pings stop once a survivor
+  is found. The survivor ratio counts all survivors, including any that the aftershock cuts off.
+- **Acoustic pings** carry position (a direction and distance estimate) but not a route. The robot
+  still has to find a way through the rubble with its own sensors.
+- **Sensing.** Debris sensing is perfect within the square window. Robots never see the full map.
+- **Round 2 coverage.** The reachable area is the free cells connected to a working robot (the failed
+  robot counts as an obstacle), plus cells already searched that are still free.
+- **Radio link.** Single-hop within `comm_range`, with no latency or packet loss while it works. After
+  it fails, robots only perceive teammates within 2 cells, and no trails are merged.
+- **Failed robots** stay in place as permanent obstacles.
 - **Latency** is wall-clock time for the swarm's sense, share and decide cycle in one tick. It depends
-  on the machine, but stays far below the 50 ms budget (and a test enforces that budget).
-- **Determinism.** A given `(config, seed)` always produces the same mission. The map, agent noise
-  and shift use independent `SeedSequence` streams, so changing the weights never changes the building.
-- **Privacy and security.** Everything runs locally. There are no network calls, API keys or secrets,
-  and Streamlit usage statistics are turned off.
+  on the machine; a test enforces a 50 ms budget.
+- **Determinism.** A given `(config, seed)` always produces the same mission. The web demo uses its own
+  RNG, so its maps differ from the Python seeds.
+- **Security and privacy.** Everything runs locally and offline, with no API keys; see
+  [SECURITY.md](SECURITY.md).
 
 ---
 
 ## Attempt Notes
 
-What changed between iterations, and why:
+### Attempt 2 (score 67.17 → this revision)
 
-1. **Attempt 1: baseline swarm.** Implemented the pheromone score, BFS fallback, deadlock breaker,
-   sequential collision-free moves and `np.maximum` map merging. The first run on the defaults gave
-   100% coverage and 0 collisions in Round 1.
-2. **Idle mode instead of endless wandering.** Once a robot's belief contains no unvisited cells,
-   it stays put instead of drifting to the least-visited neighbour. This cuts wasted moves, which
-   carry a 0.01 fitness penalty each. It also lets the simulator stop early once every robot is idle
-   or everything is covered, which made the 312-simulation PSO run take about 25 s.
-3. **BFS routes around teammates.** Perceived robots are obstacles for BFS, so a robot takes a
-   detour instead of waiting behind a teammate. The 3-tick deadlock breaker is kept as a last resort.
-4. **Fairer Round 2 coverage.** Recomputing reachability only from the robots' positions would
-   ignore work that was already done. The denominator now also keeps cells that were visited before
-   the aftershock, and it treats the failed robot as an obstacle.
-5. **PSO seeded with the defaults and checked on held-out maps.** Putting the hand-set weights in
-   particle 0 guarantees tuning never makes things worse on the tuning seeds. The CLI then evaluates
-   on 10 unseen seeds to check for over-fitting. This showed the Round 1 gain is marginal
-   (+0.04 fitness) and the Round 2 gain is real (+3.8).
-6. **Advisor contradicted PSO.** In Round 2 the "revisiting cells" rule said to *raise* the pheromone
-   weight while PSO had just *lowered* it. The real cause is the lost radio link, so that rule is now
-   round-aware and recommends restoring map sharing instead.
-7. **Dashboard readability.** In the first layout, the metric labels were cut off in four narrow
-   columns, so it now uses a two-column grid. The map also got integer row/column axes and a hatched
-   legend entry for new debris.
-8. **Test fix.** One fitness assertion used a hand-computed 92.0. The correct value is
-   80 + 12 + 10 − 5 = 97.0, so the test was wrong, not the code.
+**Summary:** added a fast Vercel demo because the Streamlit URL timed out in the latency probe;
+renamed the code to domain terms for problem alignment; added pheromone evaporation and survivor pings
+for innovation; added `.env.example`, `SECURITY.md` and an SDG section.
+
+1. **Efficiency: instant-load Vercel page.** The auditor's probe timed out on the Streamlit URL
+   (free-tier cold start), so [`web/index.html`](web/index.html) is now the primary demo.
+   - It is a single 25 KB file with inline CSS and JS, no frameworks and no network requests.
+   - It runs a live JavaScript port of the swarm with an Aftershock button.
+   - `web/vercel.json` adds a hash-pinned CSP.
+   - A headless Node test runs the page's own JavaScript on 16 maps and asserts zero collisions.
+2. **Problem alignment: domain vocabulary.** Classes and functions now use the language of the
+   problem: `DisasterZone`, `Survivor`, `Debris`, `Aftershock`, `Robot`, `PheromoneTrail`,
+   `RadioLink`, `MissionControl`, `MissionAdvisor`, `sense_debris`, `drop_aftershock_debris`,
+   `share_pheromone_trails` and `_reroute`. The refactor changed no behaviour: the CLI results were
+   bit-identical before and after (127.092 and 120.314).
+3. **Innovation: two adaptive features, each behind a config flag with tests.**
+   - **Pheromone evaporation.** Trails fade and stale areas get re-patrolled. `EVAPORATION_RATE` joins
+     the PSO search space.
+   - **Survivor acoustic pings.** Robots home in on survivors they hear, and the new
+     time-to-first-survivor metric is reported everywhere.
+   - `scripts/ablation.py` measures both on 20 zones.
+4. **Honest finding: PSO over-fits.** With pings on, weights tuned on 3 seeds scored *lower* on held-out
+   maps. We added an over-fitting guard (`main.generalizes`) so the advisor never recommends weights
+   that fail on unseen maps.
+5. **Security.**
+   - [`swarmrescue/settings.py`](swarmrescue/settings.py) loads `SWARM_SEED` and `LOG_LEVEL` from
+     `.env` or the environment. It reads only known keys, bounds and allow-lists every value, and
+     never crashes on bad input.
+   - New files: `.env.example` and [`SECURITY.md`](SECURITY.md).
+   - Every CLI flag has explicit bounds (seed lists and PSO budgets are capped against resource
+     exhaustion), and all dashboard inputs are bounded widgets.
+   - A test scans all tracked files for credential-like strings.
+6. **Docs and accessibility.**
+   - Added the SDG 9 and SDG 11 section, Mermaid architecture and end-to-end diagrams, two screenshots
+     under `docs/`, and a Demo section.
+   - The dashboard legend no longer overlaps the axis label.
+   - The dashboard gained adaptive-feature toggles and a time-to-first-survivor metric.
+
+### Attempt 1
+
+1. **Baseline swarm.** Pheromone score, BFS fallback, deadlock breaker, sequential collision-free
+   moves and `np.maximum` map merging. 100% coverage and 0 collisions in Round 1.
+2. **Idle mode instead of endless wandering.** This cut wasted moves and let missions stop early,
+   which made PSO fast (about 25 s).
+3. **BFS routes around teammates.** Perceived robots are obstacles. The deadlock breaker is the last
+   resort.
+4. **Fairer Round 2 coverage.** The denominator keeps cells searched before the aftershock, and treats
+   the failed robot as an obstacle.
+5. **PSO seeded with the defaults and checked on held-out maps.**
+6. **The advisor contradicted PSO** in Round 2, so the "revisiting cells" rule became round-aware.
+7. **Dashboard readability.** Two-column metrics and integer axes.
+8. **Test fix.** One hand-computed fitness assertion was wrong (97.0, not 92.0).
 
 ---
 
@@ -373,28 +542,26 @@ swarmrescue/
 ├── swarmrescue/
 │   ├── __init__.py
 │   ├── config.py        # SwarmConfig frozen dataclass + validation, PSO bounds
-│   ├── world.py         # map generation, BFS distances, reachable(), apply_shift()
-│   ├── agent.py         # Agent: sensing, pheromone scoring, choose_move, BFS, deadlock breaker
-│   ├── coordination.py  # decentralized perception + peer-to-peer map sharing
-│   ├── simulation.py    # simulate() -> SimulationResult, fitness, coverage, collision audit
-│   ├── optimizer.py     # PSO with convergence log
-│   └── advisor.py       # rule-based Mission Advisor
-├── tests/
-│   ├── conftest.py      # shared fixtures
-│   ├── test_config.py   # defaults, immutability, validation
-│   ├── test_world.py    # generation, BFS distances, reachability, shift
-│   ├── test_agent.py    # BFS optimality, pheromone/spread rules, deadlock, replanning, sharing
-│   ├── test_simulation.py # fitness formula, zero collisions, walls, dead robot, latency, determinism
-│   ├── test_optimizer.py  # monotone best, bounds, reproducibility
-│   ├── test_advisor.py    # recommendation rules
-│   ├── test_cli.py        # CLI smoke tests
-│   └── test_app.py        # headless Streamlit AppTest
+│   ├── settings.py      # safe .env / environment loader (SWARM_SEED, LOG_LEVEL)
+│   ├── world.py         # DisasterZone, Survivor, Debris, Aftershock, BFS, reachable(), drop_aftershock_debris()
+│   ├── agent.py         # Robot, PheromoneTrail (evaporation), pheromone rule, BFS reroute, ping homing
+│   ├── coordination.py  # RadioLink (trail sharing), perceive_teammates
+│   ├── simulation.py    # MissionControl, simulate() -> SimulationResult, fitness, collision audit
+│   ├── optimizer.py     # PSO with convergence log and flag-dependent search space
+│   └── advisor.py       # MissionAdvisor rule-based recommendations
+├── web/
+│   ├── index.html       # instant-load Vercel demo (live JS port, no network requests)
+│   └── vercel.json      # security headers + hash-pinned CSP
+├── docs/                # screenshots (web-demo.png, dashboard-map.png)
+├── scripts/ablation.py  # pings / evaporation ablation study
+├── tests/               # 148 tests: world, agent, simulation, optimizer, advisor, evaporation,
+│                        #   pings, security, CLI, Streamlit AppTest, web page (+ headless JS run)
 ├── main.py              # CLI
-├── app.py               # Streamlit "Rescue Mission Control"
+├── app.py               # Streamlit Rescue Mission Control
 ├── requirements.txt     # pinned dependencies
-├── pytest.ini
-├── .streamlit/config.toml
-├── .gitignore
+├── .env.example         # optional settings, no secrets
+├── SECURITY.md
+├── pytest.ini, .gitattributes, .gitignore, .streamlit/config.toml, .devcontainer/
 ├── LICENSE
 └── README.md
 ```

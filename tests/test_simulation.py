@@ -167,3 +167,14 @@ def test_mission_control_matches_simulate(default_cfg: SwarmConfig) -> None:
     a = MissionControl(default_cfg.with_updates(seed=5)).run()
     b = simulate(default_cfg.with_updates(seed=5))
     assert a.fitness == b.fitness and a.final_positions == b.final_positions
+
+
+def test_ablation_script_runs() -> None:
+    """scripts/ablation.py produces one Markdown row per variant for both rounds."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "ablation.py"
+    out = subprocess.run([sys.executable, str(script), "--maps", "1"], capture_output=True, text=True, check=True).stdout
+    assert out.count("| Attempt 1 baseline") == 2 and out.count("| + acoustic pings only") == 2

@@ -115,7 +115,7 @@ def render_frame(frame: Frame, survivors: tuple[tuple[int, int], ...], initial_g
         Line2D([], [], marker="^", color="none", markerfacecolor=C_MISSING, markeredgecolor="black",
                markersize=10, label="Survivor not yet found"),
     ]
-    ax.legend(handles=legend, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=2, fontsize=8, frameon=False)
+    ax.legend(handles=legend, loc="upper center", bbox_to_anchor=(0.5, -0.09), ncol=2, fontsize=8, frameon=False)
     ax.set_title(f"Tick {frame.tick} - coverage {frame.coverage:.0%}", fontsize=11)
     fig.tight_layout()
     return fig
