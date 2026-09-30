@@ -8,8 +8,11 @@ Okabe-Ito colour, explained in a text legend, and summarised in plain text.
 
 from __future__ import annotations
 
+import dataclasses
+import logging
+import math
 import time
-from typing import Any
+from typing import Any, Mapping, MutableMapping
 
 import matplotlib
 
@@ -25,7 +28,7 @@ from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
 
 from swarmrescue.advisor import PRIORITIES, advise  # noqa: E402
-from swarmrescue.config import SwarmConfig  # noqa: E402
+from swarmrescue.config import TUNABLE_BOUNDS, SwarmConfig  # noqa: E402
 from swarmrescue.optimizer import PSOResult, run_pso  # noqa: E402
 from swarmrescue.settings import SEED_BOUNDS, load_settings  # noqa: E402
 from swarmrescue.simulation import Frame, SimulationResult, simulate  # noqa: E402
@@ -41,6 +44,7 @@ C_FOUND = "#009E73"      # bluish green star
 C_MISSING = "#CC79A7"    # reddish purple triangle
 
 SEVERITY_LABEL = {"critical": "CRITICAL", "warning": "WARNING", "info": "INFO", "success": "OK"}
+logger = logging.getLogger("swarmrescue.app")
 WEIGHT_DEFAULTS = {"pheromone_weight": 1.0, "spread_weight": 0.5, "randomness": 0.1, "evaporation_rate": 0.01}
 
 
@@ -178,18 +182,75 @@ def show_metrics(result: SimulationResult) -> None:
             col.metric(label, value)
 
 
+def sanitize_weights(state: MutableMapping[str, Any]) -> list[str]:
+    """Repair stale or invalid behaviour-weight values in session state.
+
+    Session state survives reruns and app updates, so it can hold values from
+    an older version: strings, ``None``, NaN or out-of-range numbers. Each
+    weight is coerced to a finite float clamped to its PSO bounds, or reset to
+    its default. This must run *before* the weight widgets are created.
+
+    Returns:
+        The keys that had to be repaired.
+    """
+    repaired: list[str] = []
+    for key, default in WEIGHT_DEFAULTS.items():
+        raw = state.get(key, default)
+        low, high = TUNABLE_BOUNDS[key]
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = math.nan
+        if isinstance(raw, bool) or not math.isfinite(value):
+            value = default
+        value = min(max(value, low), high)
+        if key in state and raw != value:
+            repaired.append(key)
+        state[key] = value
+    return repaired
+
+
+def apply_tuned_weights(state: MutableMapping[str, Any], best_params: Mapping[str, float]) -> None:
+    """Copy PSO's best weights into session state (known keys only, clamped to bounds)."""
+    for key, value in best_params.items():
+        if key in WEIGHT_DEFAULTS:
+            low, high = TUNABLE_BOUNDS[key]
+            state[key] = min(max(float(round(value, 3)), low), high)
+
+
 def apply_tuned() -> None:
     """Button callback: copy PSO's best weights into the weight sliders."""
     pso: PSOResult | None = st.session_state.get("pso")
     if pso is not None:
-        for key, value in pso.best_params.items():
-            st.session_state[key] = float(round(value, 3))
+        apply_tuned_weights(st.session_state, pso.best_params)
 
 
-def sidebar() -> tuple[dict[str, Any], int, str]:
-    """Operator inputs. Returns (config dict, round, priority)."""
-    for key, value in WEIGHT_DEFAULTS.items():
-        st.session_state.setdefault(key, value)
+def build_config_dict(
+    inputs: Mapping[str, Any],
+    state: Mapping[str, Any],
+    config_cls: type = SwarmConfig,
+) -> tuple[dict[str, Any], list[str]]:
+    """Build the keyword arguments for ``config_cls`` exactly as the dashboard does.
+
+    Widget inputs are merged with the behaviour weights held in session state.
+    Only fields that ``config_cls`` accepts are kept. This guards against a
+    server still running an older copy of ``swarmrescue.config``, which
+    otherwise crashes with ``TypeError: unexpected keyword argument``.
+
+    Returns:
+        ``(config kwargs, dropped keys)``.
+    """
+    merged = {**inputs, **{key: state[key] for key in WEIGHT_DEFAULTS if key in state}}
+    accepted = {f.name for f in dataclasses.fields(config_cls)}
+    cfg = {k: v for k, v in merged.items() if k in accepted}
+    return cfg, sorted(set(merged) - accepted)
+
+
+def sidebar() -> tuple[dict[str, Any], list[str], int, str]:
+    """Operator inputs. Returns (config kwargs, dropped keys, round, priority)."""
+    repaired = sanitize_weights(st.session_state)
+    if repaired:
+        logger.warning("Reset stale session values: %s", repaired)
     sb = st.sidebar
     sb.header("Mission settings")
     round_label = sb.radio(
@@ -217,17 +278,15 @@ def sidebar() -> tuple[dict[str, Any], int, str]:
                                       help="Trails fade over time so long-searched areas are revisited.")
         st.slider("Evaporation rate per tick", 0.0, 0.2, step=0.005, key="evaporation_rate",
                   disabled=not use_evaporation)
-    cfg = {
-        "grid_size": grid, "num_agents": agents, "wall_density": density, "battery": battery,
-        "num_survivors": survivors, "max_ticks": max_ticks, "seed": int(seed),
-        "new_walls": min(25, grid * grid // 4),
-        "pheromone_weight": st.session_state["pheromone_weight"],
-        "spread_weight": st.session_state["spread_weight"],
-        "randomness": st.session_state["randomness"],
-        "use_pings": use_pings, "ping_range": ping_range,
-        "use_evaporation": use_evaporation, "evaporation_rate": st.session_state["evaporation_rate"],
+    inputs = {
+        "grid_size": int(grid), "num_agents": int(agents), "wall_density": float(density), "battery": int(battery),
+        "num_survivors": int(survivors), "max_ticks": int(max_ticks), "seed": int(seed),
+        "new_walls": min(25, int(grid) * int(grid) // 4),
+        "use_pings": bool(use_pings), "ping_range": int(ping_range),
+        "use_evaporation": bool(use_evaporation),
     }
-    return cfg, round_no, priority
+    cfg, dropped = build_config_dict(inputs, st.session_state)
+    return cfg, dropped, round_no, priority
 
 
 def main() -> None:
@@ -238,10 +297,17 @@ def main() -> None:
         "Decentralized ant-pheromone robot swarm searching a collapsed building. "
         "Each robot decides locally; no central controller."
     )
-    cfg_dict, round_no, priority = sidebar()
+    cfg_dict, dropped, round_no, priority = sidebar()
+    st.session_state["last_config"] = dict(cfg_dict)
+    if dropped:
+        logger.warning("SwarmConfig on this server does not accept %s; is the package stale?", dropped)
+        st.warning(
+            "Some settings were ignored because the server is running an outdated copy of the "
+            f"simulator ({', '.join(dropped)}). Reboot the app to load the latest version."
+        )
     try:
         cfg = SwarmConfig(**cfg_dict)
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         st.error(f"Invalid settings: {exc}")
         return
 
