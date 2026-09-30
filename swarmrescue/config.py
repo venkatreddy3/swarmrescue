@@ -14,7 +14,10 @@ TUNABLE_BOUNDS: dict[str, tuple[float, float]] = {
     "pheromone_weight": (0.0, 3.0),
     "spread_weight": (0.0, 3.0),
     "randomness": (0.0, 1.0),
+    "evaporation_rate": (0.0, 0.2),
 }
+# Parameters PSO always tunes; evaporation_rate is added when evaporation is on.
+BEHAVIOUR_WEIGHTS: tuple[str, ...] = ("pheromone_weight", "spread_weight", "randomness")
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,8 @@ class SwarmConfig:
         shift_tick: Tick at which the Round 2 scenario shift happens.
         new_walls: Number of debris cells that appear at the shift.
         seed: Master random seed (map, survivors, noise, shift).
+        use_evaporation: Enable pheromone evaporation (trails fade over time).
+        evaporation_rate: Fraction of pheromone lost per tick when enabled.
     """
 
     grid_size: int = 20
@@ -52,6 +57,8 @@ class SwarmConfig:
     shift_tick: int = 60
     new_walls: int = 25
     seed: int = 0
+    use_evaporation: bool = False
+    evaporation_rate: float = 0.01
 
     def __post_init__(self) -> None:
         """Validate every field, raising ``ValueError`` on bad values."""
@@ -91,7 +98,9 @@ def validate_config(cfg: SwarmConfig) -> None:
             isinstance(value, int) and not isinstance(value, bool),
             f"{name} must be an integer, got {value!r}",
         )
-    for name in ("wall_density", "pheromone_weight", "spread_weight", "randomness"):
+    for name in ("use_evaporation",):
+        _require(isinstance(getattr(cfg, name), bool), f"{name} must be True or False")
+    for name in ("wall_density", "pheromone_weight", "spread_weight", "randomness", "evaporation_rate"):
         value = getattr(cfg, name)
         _require(
             isinstance(value, (int, float)) and not isinstance(value, bool),

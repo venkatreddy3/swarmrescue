@@ -12,10 +12,19 @@ from typing import Callable, Sequence
 
 import numpy as np
 
-from swarmrescue.config import TUNABLE_BOUNDS, SwarmConfig
+from swarmrescue.config import BEHAVIOUR_WEIGHTS, TUNABLE_BOUNDS, SwarmConfig
 from swarmrescue.simulation import mean_fitness
 
-PARAM_NAMES: tuple[str, ...] = tuple(TUNABLE_BOUNDS)
+PARAM_NAMES: tuple[str, ...] = BEHAVIOUR_WEIGHTS
+
+
+def search_space(cfg: SwarmConfig) -> tuple[str, ...]:
+    """Parameters PSO tunes for ``cfg``.
+
+    These are the three behaviour weights, plus ``evaporation_rate`` when
+    pheromone evaporation is enabled.
+    """
+    return PARAM_NAMES + (("evaporation_rate",) if cfg.use_evaporation else ())
 
 
 @dataclass(frozen=True)
@@ -57,16 +66,20 @@ class PSOResult:
         return base.with_updates(**self.best_params)
 
 
-def _to_params(position: np.ndarray) -> dict[str, float]:
+def _to_params(position: np.ndarray, names: Sequence[str] = PARAM_NAMES) -> dict[str, float]:
     """Convert a particle position vector to a parameter dictionary."""
-    return {name: float(round(v, 6)) for name, v in zip(PARAM_NAMES, position)}
+    return {name: float(round(v, 6)) for name, v in zip(names, position)}
 
 
 def objective(
-    position: np.ndarray, base_cfg: SwarmConfig, seeds: Sequence[int], round_no: int
+    position: np.ndarray,
+    base_cfg: SwarmConfig,
+    seeds: Sequence[int],
+    round_no: int,
+    names: Sequence[str] = PARAM_NAMES,
 ) -> float:
     """Mean mission fitness of the parameters encoded by ``position``."""
-    return mean_fitness(base_cfg.with_updates(**_to_params(position)), tuple(seeds), round_no)
+    return mean_fitness(base_cfg.with_updates(**_to_params(position, names)), tuple(seeds), round_no)
 
 
 def run_pso(
@@ -108,21 +121,22 @@ def run_pso(
     if n_particles < 1 or n_iters < 0 or not seeds:
         raise ValueError("need n_particles >= 1, n_iters >= 0 and at least one seed")
     rng = np.random.default_rng(rng_seed)
-    low = np.array([TUNABLE_BOUNDS[p][0] for p in PARAM_NAMES])
-    high = np.array([TUNABLE_BOUNDS[p][1] for p in PARAM_NAMES])
+    names = search_space(base_cfg)
+    low = np.array([TUNABLE_BOUNDS[p][0] for p in names])
+    high = np.array([TUNABLE_BOUNDS[p][1] for p in names])
     span = high - low
     vmax = 0.2 * span
 
-    pos = low + rng.random((n_particles, len(PARAM_NAMES))) * span
-    pos[0] = [float(getattr(base_cfg, p)) for p in PARAM_NAMES]
+    pos = low + rng.random((n_particles, len(names))) * span
+    pos[0] = [float(getattr(base_cfg, p)) for p in names]
     vel = (rng.random(pos.shape) * 2 - 1) * 0.1 * span
-    fit = np.array([objective(p, base_cfg, seeds, round_no) for p in pos])
+    fit = np.array([objective(p, base_cfg, seeds, round_no, names) for p in pos])
     baseline = float(fit[0])
 
     pbest, pbest_fit = pos.copy(), fit.copy()
     g = int(np.argmax(pbest_fit))
     gbest, gbest_fit = pbest[g].copy(), float(pbest_fit[g])
-    history = [IterationLog(0, gbest_fit, float(fit.mean()), _to_params(gbest))]
+    history = [IterationLog(0, gbest_fit, float(fit.mean()), _to_params(gbest, names))]
     if callback:
         callback(history[-1])
 
@@ -131,18 +145,18 @@ def run_pso(
         vel = inertia * vel + c1 * r1 * (pbest - pos) + c2 * r2 * (gbest - pos)
         vel = np.clip(vel, -vmax, vmax)
         pos = np.clip(pos + vel, low, high)
-        fit = np.array([objective(p, base_cfg, seeds, round_no) for p in pos])
+        fit = np.array([objective(p, base_cfg, seeds, round_no, names) for p in pos])
         improved = fit > pbest_fit
         pbest[improved], pbest_fit[improved] = pos[improved], fit[improved]
         g = int(np.argmax(pbest_fit))
         if pbest_fit[g] > gbest_fit:
             gbest, gbest_fit = pbest[g].copy(), float(pbest_fit[g])
-        history.append(IterationLog(it, gbest_fit, float(fit.mean()), _to_params(gbest)))
+        history.append(IterationLog(it, gbest_fit, float(fit.mean()), _to_params(gbest, names)))
         if callback:
             callback(history[-1])
 
     return PSOResult(
-        best_params=_to_params(gbest),
+        best_params=_to_params(gbest, names),
         best_fitness=gbest_fit,
         baseline_fitness=baseline,
         history=tuple(history),

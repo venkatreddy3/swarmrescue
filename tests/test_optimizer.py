@@ -70,3 +70,11 @@ def test_pso_rejects_bad_settings(tiny_cfg: SwarmConfig) -> None:
         run_pso(tiny_cfg, n_particles=0)
     with pytest.raises(ValueError):
         run_pso(tiny_cfg, seeds=())
+
+
+def test_pso_tunes_evaporation_rate_when_enabled(tiny_cfg: SwarmConfig) -> None:
+    """With evaporation on, PSO returns a bounded evaporation_rate too."""
+    result = run_pso(tiny_cfg.with_updates(use_evaporation=True), seeds=(1,), n_particles=3, n_iters=1, rng_seed=1)
+    low, high = TUNABLE_BOUNDS["evaporation_rate"]
+    assert low <= result.best_params["evaporation_rate"] <= high
+    assert all(b >= a for a, b in zip([h.best_fitness for h in result.history], [h.best_fitness for h in result.history][1:]))

@@ -244,6 +244,8 @@ class MissionControl:
         start = time.perf_counter()
         for r in self.robots:
             self.wall_surprises += r.sense_debris(self.zone.grid, self.cfg.sense_range)
+            if self.cfg.use_evaporation and r.alive:
+                r.trail.evaporate(self.cfg.evaporation_rate)
         self.radio.share_pheromone_trails(self.robots)
         radius = self.radio.perception_radius
         previous = [r.pos for r in self.robots]

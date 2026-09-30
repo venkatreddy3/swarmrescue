@@ -25,12 +25,16 @@ from swarmrescue.world import DEBRIS, FREE, Cell, manhattan, neighbors4
 
 UNKNOWN: int = -1
 DEADLOCK_TICKS: int = 3
+# With evaporation on, a searched cell whose pheromone has faded below this
+# level counts as stale, and idle robots patrol back to it.
+STALE_PHEROMONE: float = 0.05
 
 MODE_PHEROMONE = "pheromone"
 MODE_BFS = "reroute"
 MODE_DEADLOCK = "deadlock"
 MODE_BLOCKED = "blocked"
 MODE_IDLE = "idle"
+MODE_PATROL = "patrol"
 MODE_OFF = "off"
 
 
@@ -56,6 +60,19 @@ class PheromoneTrail:
     def strength(self, cell: Cell) -> float:
         """Pheromone intensity at ``cell``."""
         return float(self.intensity[cell])
+
+    def evaporate(self, rate: float) -> None:
+        """Let the pheromone fade: ``intensity *= (1 - rate)``.
+
+        Like real ant trails, old marks weaken, so areas searched long ago
+        attract robots again. The ``visited`` memory is not erased.
+        """
+        if rate > 0.0:
+            self.intensity *= 1.0 - rate
+
+    def stale_mask(self, threshold: float = STALE_PHEROMONE) -> np.ndarray:
+        """Searched cells whose pheromone has faded below ``threshold``."""
+        return self.visited & (self.intensity < threshold)
 
     def is_visited(self, cell: Cell) -> bool:
         """True if ``cell`` has been searched according to this trail."""
@@ -215,7 +232,8 @@ class Robot:
 
         Priority: deadlock breaker, then the pheromone rule (while an unvisited
         neighbour exists), then a BFS reroute to the nearest unvisited
-        known-free cell, then idle to save battery.
+        known-free cell, then (with evaporation) a patrol back to the nearest
+        stale cell, then idle to save battery.
 
         Args:
             cfg: Mission configuration (behaviour weights).
@@ -248,14 +266,19 @@ class Robot:
         # All neighbours already searched: reroute to the nearest unsearched cell.
         passable = self.known == FREE
         frontier = passable & ~self.trail.visited
-        if not frontier.any():
-            self.mode = MODE_IDLE  # nothing left to search in my belief: save energy
+        if frontier.any():
+            step = self._reroute(frontier, blocked, passable)
+            if step is not None:
+                self.mode = MODE_BFS
+                return step
+            self.mode = MODE_BLOCKED  # a teammate is in the way; wait
             return None
-        step = self._reroute(frontier, blocked, passable)
-        if step is not None:
-            self.mode = MODE_BFS
-            return step
-        self.mode = MODE_BLOCKED  # a teammate is in the way; wait
+        if cfg.use_evaporation:
+            step = self._reroute(passable & self.trail.stale_mask(), blocked, passable)
+            if step is not None:
+                self.mode = MODE_PATROL  # re-sweep an area searched long ago
+                return step
+        self.mode = MODE_IDLE  # nothing left to search in my belief: save energy
         return None
 
     def commit(self, move: Cell | None) -> None:
