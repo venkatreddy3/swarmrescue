@@ -140,7 +140,14 @@ def advise(
              "spread_weight": round(min(3.0, cfg.spread_weight + 0.3), 2)},
         ))
 
-    if energy_per_cell > 2.5 or (priority == "energy" and energy_per_cell > 1.5):
+    revisiting = energy_per_cell > 2.5 or (priority == "energy" and energy_per_cell > 1.5)
+    if revisiting and round2:
+        add(Recommendation(
+            "info", "Robots are revisiting cells",
+            f"About {energy_per_cell:.1f} moves per explored cell. Without radio, robots cannot share "
+            "pheromone maps and re-search each other's areas; restoring map sharing helps most.",
+        ))
+    elif revisiting:
         add(Recommendation(
             "info", "Robots are revisiting cells",
             f"About {energy_per_cell:.1f} moves per explored cell. Lower randomness and raise the "
