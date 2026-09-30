@@ -27,6 +27,7 @@ from matplotlib.patches import Patch  # noqa: E402
 from swarmrescue.advisor import PRIORITIES, advise  # noqa: E402
 from swarmrescue.config import SwarmConfig  # noqa: E402
 from swarmrescue.optimizer import PSOResult, run_pso  # noqa: E402
+from swarmrescue.settings import SEED_BOUNDS, load_settings  # noqa: E402
 from swarmrescue.simulation import Frame, SimulationResult, simulate  # noqa: E402
 
 # Okabe-Ito colour-blind-safe palette.
@@ -202,7 +203,7 @@ def sidebar() -> tuple[dict[str, Any], int, str]:
     battery = sb.slider("Battery (moves per robot)", 20, 1000, 250, 10)
     survivors = sb.slider("Trapped survivors", 0, 15, 5)
     max_ticks = sb.slider("Mission time limit (ticks)", 50, 1000, 300, 10)
-    seed = sb.number_input("Random seed (map layout)", 0, 10_000, 1)
+    seed = sb.number_input("Random seed (map layout)", SEED_BOUNDS[0], SEED_BOUNDS[1], load_settings().seed, step=1)
     priority = sb.selectbox("Operator priority (for advice)", PRIORITIES)
     with sb.expander("Behaviour weights (tunable by PSO)"):
         st.slider("Pheromone weight (avoid visited cells)", 0.0, 3.0, step=0.01, key="pheromone_weight")

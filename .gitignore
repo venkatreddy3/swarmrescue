@@ -15,6 +15,7 @@ ENV/
 # Secrets / local config (never commit)
 .env
 .env.*
+!.env.example
 *.key
 .streamlit/secrets.toml
 

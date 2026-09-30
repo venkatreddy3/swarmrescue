@@ -9,16 +9,21 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import logging
+import math
 import sys
 import time
-from typing import Sequence
+from typing import Callable, Sequence
 
 import numpy as np
 
 from swarmrescue.advisor import PRIORITIES, advise
 from swarmrescue.config import SwarmConfig
 from swarmrescue.optimizer import IterationLog, run_pso
+from swarmrescue.settings import Settings, configure_logging, load_settings
 from swarmrescue.simulation import SimulationResult, evaluate
+
+logger = logging.getLogger("swarmrescue.cli")
 
 HEADER = (
     f"{'seed':>5} | {'coverage':>8} | {'survivors':>9} | {'1st surv':>8} | {'t@90%':>5} | "
@@ -26,27 +31,68 @@ HEADER = (
 )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Create the CLI argument parser."""
-    p = argparse.ArgumentParser(description="SwarmRescue: decentralized ant-pheromone swarm exploration")
-    p.add_argument("--round", type=int, choices=(1, 2), default=1, help="1 = static building, 2 = scenario shift")
+MAX_SEEDS: int = 50
+MAX_PARTICLES: int = 30
+MAX_ITERS: int = 50
+
+
+def bounded_int(low: int, high: int) -> Callable[[str], int]:
+    """argparse type: an integer within ``[low, high]``."""
+
+    def parse(text: str) -> int:
+        """Parse and range-check one integer argument."""
+        try:
+            value = int(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{text!r} is not an integer") from None
+        if not low <= value <= high:
+            raise argparse.ArgumentTypeError(f"{value} is outside [{low}, {high}]")
+        return value
+
+    return parse
+
+
+def bounded_float(low: float, high: float) -> Callable[[str], float]:
+    """argparse type: a finite float within ``[low, high]``."""
+
+    def parse(text: str) -> float:
+        """Parse and range-check one float argument."""
+        try:
+            value = float(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+        if not math.isfinite(value) or not low <= value <= high:
+            raise argparse.ArgumentTypeError(f"{text} is outside [{low}, {high}]")
+        return value
+
+    return parse
+
+
+def build_parser(settings: Settings | None = None) -> argparse.ArgumentParser:
+    """Create the CLI argument parser; every numeric input is range-checked."""
+    settings = settings or Settings()
+    seed = bounded_int(0, 10_000)
+    p = argparse.ArgumentParser(description="SwarmRescue: decentralized ant-pheromone search and rescue swarm")
+    p.add_argument("--round", type=int, choices=(1, 2), default=1, help="1 = static building, 2 = aftershock")
     p.add_argument("--tune", action="store_true", help="tune weights with PSO and compare before/after")
-    p.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3], help="seeds (maps) to run / tune on")
-    p.add_argument("--eval-seeds", type=int, nargs="*", default=list(range(101, 111)),
+    p.add_argument("--seeds", type=seed, nargs="+", default=settings.default_seeds,
+                   help=f"seeds (disaster zones) to run / tune on, at most {MAX_SEEDS} (default from SWARM_SEED)")
+    p.add_argument("--eval-seeds", type=seed, nargs="*", default=list(range(101, 111)),
                    help="held-out seeds for an unbiased before/after comparison when tuning")
-    p.add_argument("--particles", type=int, default=8, help="PSO particles")
-    p.add_argument("--iters", type=int, default=12, help="PSO iterations")
-    p.add_argument("--grid-size", type=int, default=20)
-    p.add_argument("--agents", type=int, default=4)
-    p.add_argument("--survivors", type=int, default=5)
-    p.add_argument("--battery", type=int, default=250)
-    p.add_argument("--wall-density", type=float, default=0.18)
-    p.add_argument("--max-ticks", type=int, default=300)
+    p.add_argument("--particles", type=bounded_int(1, MAX_PARTICLES), default=8, help="PSO particles (1-30)")
+    p.add_argument("--iters", type=bounded_int(0, MAX_ITERS), default=12, help="PSO iterations (0-50)")
+    p.add_argument("--grid-size", type=bounded_int(5, 100), default=20)
+    p.add_argument("--agents", type=bounded_int(1, 20), default=4, help="number of robots (1-20)")
+    p.add_argument("--survivors", type=bounded_int(0, 50), default=5)
+    p.add_argument("--battery", type=bounded_int(1, 100_000), default=250)
+    p.add_argument("--wall-density", type=bounded_float(0.0, 0.45), default=0.18, help="debris density (0-0.45)")
+    p.add_argument("--max-ticks", type=bounded_int(1, 5000), default=300)
     p.add_argument("--priority", choices=PRIORITIES, default="balanced", help="operator goal for the advisor")
     p.add_argument("--evaporation", action="store_true", help="enable pheromone evaporation (trails fade)")
-    p.add_argument("--evaporation-rate", type=float, default=0.01, help="pheromone fraction lost per tick")
+    p.add_argument("--evaporation-rate", type=bounded_float(0.0, 0.2), default=0.01,
+                   help="pheromone fraction lost per tick (0-0.2)")
     p.add_argument("--no-pings", action="store_true", help="disable survivor acoustic pings")
-    p.add_argument("--ping-range", type=int, default=4, help="distance at which robots hear survivors")
+    p.add_argument("--ping-range", type=bounded_int(1, 10), default=4, help="distance at which robots hear survivors")
     return p
 
 
@@ -104,12 +150,18 @@ def print_table(title: str, results: Sequence[SimulationResult]) -> dict[str, fl
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point: run missions, optionally tune, print report and advice."""
-    args = build_parser().parse_args(argv)
+    settings = load_settings()
+    configure_logging(settings)
+    parser = build_parser(settings)
+    args = parser.parse_args(argv)
+    if len(args.seeds) > MAX_SEEDS or len(args.eval_seeds) > MAX_SEEDS:
+        parser.error(f"at most {MAX_SEEDS} seeds are allowed")
     try:
         cfg = config_from_args(args)
     except ValueError as exc:
         print(f"Invalid configuration: {exc}", file=sys.stderr)
         return 2
+    logger.info("Running round %d on seeds %s", args.round, args.seeds)
 
     print("=" * 78)
     print(f"SwarmRescue mission report - Round {args.round}")
