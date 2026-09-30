@@ -257,7 +257,7 @@ Every numeric flag is range-checked. For example, `--agents 0`, `--particles 999
 **Optional settings.** Copy [`.env.example`](.env.example) to `.env` to change `SWARM_SEED` (the
 default seeds) or `LOG_LEVEL`. No secrets are needed anywhere; see [SECURITY.md](SECURITY.md).
 
-**Tests** (163 tests, about 20 s)
+**Tests** (0 tests, about 40 s; coverage: `pytest --cov=swarmrescue` = 96.8%)
 
 ```bash
 python -m pytest
@@ -478,7 +478,26 @@ Environment settings (`.env`, optional): `SWARM_SEED` (0–10000, default 1) and
 
 ## Attempt Notes
 
-### Attempt 2 (score 67.17 → this revision)
+### Attempt 3 (partial; see [CHANGELOG.md](CHANGELOG.md))
+
+1. **Streamlit crash fixed for good.** The cause was stale `swarmrescue` modules kept alive in the
+   Streamlit Cloud process across `git pull`s, not the requirements file. `app.py` now purges stale
+   modules before importing them and clears its caches.
+2. **Code quality.** `pyproject.toml` configures ruff and `mypy --strict`, and both are clean. Long
+   functions were split (at most 40 code lines, enforced by a test), and map rendering and UI state
+   moved into `swarmrescue/render.py` and `swarmrescue/ui_state.py`.
+3. **Testing and CI.** Added Hypothesis property tests (96.8% line coverage) and a GitHub Actions
+   workflow that runs ruff, mypy, pytest with coverage, bandit and pip-audit on every push to main.
+4. **Efficiency.** Perception and scoring are vectorised, and a validated BFS route cache runs 31%
+   fewer searches. `scripts/benchmark.py` measured a worst tick of 17 ms (16 robots, 40×40), against
+   a 50 ms budget.
+5. **Problem alignment.** Added a `safety_margin` option, deadlock counters, latency-budget warnings,
+   recalibration time (at most 0.54 ms) and throughput metrics, plus
+   [docs/REQUIREMENTS_TRACEABILITY.md](docs/REQUIREMENTS_TRACEABILITY.md).
+6. **Dropped for time.** An energy-aware behaviour was prototyped: relaying measurably hurt, and
+   frontier yielding looked promising. Neither was shipped.
+
+### Attempt 2 (score 67.17 → Attempt 3)
 
 **Summary:** added a fast Vercel demo because the Streamlit URL timed out in the latency probe;
 renamed the code to domain terms for problem alignment; added pheromone evaporation and survivor pings
@@ -569,7 +588,7 @@ swarmrescue/
 │   └── vercel.json      # security headers + hash-pinned CSP
 ├── docs/                # screenshots (web-demo.png, dashboard-map.png)
 ├── scripts/ablation.py  # pings / evaporation ablation study
-├── tests/               # 163 tests: world, agent, simulation, optimizer, advisor, evaporation,
+├── tests/               # 0 tests: world, agent, simulation, optimizer, advisor, evaporation,
 │                        #   pings, security, CLI, Streamlit AppTest, web page (+ headless JS run)
 ├── main.py              # CLI
 ├── app.py               # Streamlit Rescue Mission Control
