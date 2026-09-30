@@ -1,13 +1,17 @@
-"""Disaster-zone world model: map generation, reachability and scenario shift.
+"""Disaster-zone model for search and rescue.
 
-The building is an occupancy grid where ``0`` is free space and ``1`` is
-debris or wall. Robots enter through the top-left corner (the "entrance").
+The collapsed building is a :class:`DisasterZone`: an occupancy grid where
+``FREE`` (0) is open floor and ``DEBRIS`` (1) is rubble or wall. Rescue robots
+enter through the top-left entry point. :class:`Survivor` objects are trapped
+in reachable cells. In Round 2 an :class:`Aftershock` drops new
+:class:`Debris` that the robots are not told about.
 """
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from enum import IntEnum
 from typing import Iterable, Iterator
 
 import numpy as np
@@ -16,30 +20,83 @@ from swarmrescue.config import SwarmConfig
 
 Cell = tuple[int, int]
 
-FREE: int = 0
-WALL: int = 1
+
+class CellType(IntEnum):
+    """Occupancy value of one disaster-zone cell."""
+
+    FREE = 0
+    DEBRIS = 1
+
+
+FREE: int = int(CellType.FREE)
+DEBRIS: int = int(CellType.DEBRIS)
+WALL: int = DEBRIS  # walls and debris are equally impassable
 DIRECTIONS: tuple[Cell, ...] = ((-1, 0), (1, 0), (0, -1), (0, 1))
-ENTRANCE: Cell = (0, 0)
+ENTRY_POINT: Cell = (0, 0)
 _MAX_GENERATION_ATTEMPTS: int = 200
 
 
-@dataclass
-class World:
-    """Ground-truth state of the disaster zone.
+@dataclass(frozen=True)
+class Survivor:
+    """A trapped person waiting for rescue.
 
     Attributes:
-        grid: ``int8`` occupancy grid (0 free, 1 wall). Mutated by the shift.
-        starts: Initial robot cells (distinct, free, connected to entrance).
-        survivors: Cells where survivors are trapped.
-        reachable_mask: Boolean mask of free cells the swarm can reach.
-        new_walls: Cells converted to debris by the Round 2 shift.
+        survivor_id: Index of the survivor.
+        cell: Grid cell where the survivor is trapped.
+    """
+
+    survivor_id: int
+    cell: Cell
+
+
+@dataclass(frozen=True)
+class Debris:
+    """One impassable rubble cell.
+
+    Attributes:
+        cell: Location of the rubble.
+        source: ``"collapse"`` (initial map) or ``"aftershock"`` (Round 2).
+    """
+
+    cell: Cell
+    source: str = "collapse"
+
+
+@dataclass(frozen=True)
+class Aftershock:
+    """Record of the Round 2 scenario shift.
+
+    Attributes:
+        tick: Tick at which the aftershock struck.
+        debris: New debris dropped (robots are not told where).
+        failed_robot_id: Robot knocked out (the single point of failure test).
+        radio_lost: Whether the radio link went down.
+    """
+
+    tick: int
+    debris: tuple[Debris, ...]
+    failed_robot_id: int | None
+    radio_lost: bool
+
+
+@dataclass
+class DisasterZone:
+    """Ground truth of the collapsed building.
+
+    Attributes:
+        grid: ``int8`` occupancy grid (0 free, 1 debris). Mutated by aftershocks.
+        entry_cells: Starting cells of the rescue robots (distinct and free).
+        survivors: Trapped survivors.
+        reachable_mask: Boolean mask of free cells the swarm can reach
+            (the coverage denominator).
+        aftershock_debris: Cells turned into debris by aftershocks.
     """
 
     grid: np.ndarray
-    starts: list[Cell]
-    survivors: list[Cell]
+    entry_cells: list[Cell]
+    survivors: list[Survivor]
     reachable_mask: np.ndarray
-    new_walls: list[Cell] = field(default_factory=list)
+    aftershock_debris: list[Cell] = field(default_factory=list)
 
     @property
     def size(self) -> int:
@@ -50,6 +107,15 @@ class World:
     def reachable_count(self) -> int:
         """Number of reachable free cells (coverage denominator)."""
         return int(self.reachable_mask.sum())
+
+    @property
+    def survivor_cells(self) -> list[Cell]:
+        """Cells of all survivors, in survivor-id order."""
+        return [s.cell for s in self.survivors]
+
+    def is_free(self, cell: Cell) -> bool:
+        """True if ``cell`` is inside the zone and not debris."""
+        return in_bounds(cell, self.size) and self.grid[cell] == FREE
 
 
 def in_bounds(cell: Cell, size: int) -> bool:
@@ -75,12 +141,12 @@ def bfs_distances(grid: np.ndarray, sources: Iterable[Cell]) -> np.ndarray:
     """Multi-source BFS distances over free cells.
 
     Args:
-        grid: Occupancy grid (0 free, non-zero blocked).
-        sources: Start cells; blocked sources are ignored.
+        grid: Occupancy grid (0 free, non-zero debris).
+        sources: Start cells; sources on debris are ignored.
 
     Returns:
         ``int`` array of shortest 4-connected path lengths, ``-1`` where a
-        cell is blocked or unreachable.
+        cell is debris or unreachable.
     """
     size = grid.shape[0]
     free = (grid == FREE).tolist()
@@ -105,20 +171,20 @@ def reachable(grid: np.ndarray, sources: Iterable[Cell]) -> np.ndarray:
     return bfs_distances(grid, sources) >= 0
 
 
-def generate_world(cfg: SwarmConfig, rng: np.random.Generator) -> World:
-    """Create a random collapsed-building map for ``cfg``.
+def generate_disaster_zone(cfg: SwarmConfig, rng: np.random.Generator) -> DisasterZone:
+    """Create a random collapsed building for a search-and-rescue mission.
 
-    Walls are sampled i.i.d. with probability ``cfg.wall_density``. The
-    entrance corner is cleared, and maps whose reachable region is too small
-    to host the robots and survivors (or less than 40% of the free space)
-    are rejected and resampled.
+    Debris is sampled independently in each cell with probability
+    ``cfg.wall_density``. The entry point is cleared. A map is rejected and
+    resampled if its reachable region is too small to hold the robots and
+    survivors, or smaller than 40% of the free space.
 
     Args:
         cfg: Mission configuration.
         rng: Seeded random generator (the only randomness source).
 
     Returns:
-        A fully initialised :class:`World`.
+        A fully initialised :class:`DisasterZone`.
 
     Raises:
         RuntimeError: If no valid map is found after many attempts.
@@ -127,55 +193,55 @@ def generate_world(cfg: SwarmConfig, rng: np.random.Generator) -> World:
     needed = cfg.num_agents + cfg.num_survivors + 1
     for _ in range(_MAX_GENERATION_ATTEMPTS):
         grid = (rng.random((n, n)) < cfg.wall_density).astype(np.int8)
-        grid[0:2, 0:2] = FREE  # clear the entrance
-        dist = bfs_distances(grid, [ENTRANCE])
+        grid[0:2, 0:2] = FREE  # clear the entry point
+        dist = bfs_distances(grid, [ENTRY_POINT])
         mask = dist >= 0
         free_total = int((grid == FREE).sum())
         if mask.sum() < max(needed, 0.4 * free_total):
             continue
-        # Robots start at the reachable cells closest to the entrance.
+        # Robots start at the reachable cells closest to the entry point.
         order = sorted(zip(*np.nonzero(mask)), key=lambda rc: (dist[rc], rc))
-        starts = [(int(r), int(c)) for r, c in order[: cfg.num_agents]]
-        # Survivors hide in reachable cells away from the robots.
+        entry_cells = [(int(r), int(c)) for r, c in order[: cfg.num_agents]]
+        # Survivors are trapped in reachable cells away from the robots.
         candidates = [(int(r), int(c)) for r, c in order[cfg.num_agents:]]
         picks = rng.choice(len(candidates), size=cfg.num_survivors, replace=False)
-        survivors = [candidates[int(i)] for i in sorted(picks)]
-        return World(grid=grid, starts=starts, survivors=survivors, reachable_mask=mask)
-    raise RuntimeError("could not generate a valid world; lower wall_density")
+        survivors = [Survivor(i, candidates[int(p)]) for i, p in enumerate(sorted(picks))]
+        return DisasterZone(grid=grid, entry_cells=entry_cells, survivors=survivors, reachable_mask=mask)
+    raise RuntimeError("could not generate a valid disaster zone; lower wall_density")
 
 
-def apply_shift(
-    world: World,
-    num_new_walls: int,
+def drop_aftershock_debris(
+    zone: DisasterZone,
+    num_debris: int,
     robot_cells: Iterable[Cell],
     rng: np.random.Generator,
-) -> list[Cell]:
-    """Round 2 aftershock: drop new debris onto free cells.
+) -> list[Debris]:
+    """Aftershock: turn random free cells into debris.
 
-    New walls never land on robots or survivors. The world's reachable mask
-    is recomputed from the robots' positions (cells still reachable by the
-    swarm). Robots are *not* told about the new walls; they must sense them.
+    New debris never lands on a robot or a survivor. The zone's reachable
+    mask is recomputed from the robots' positions. Robots are *not* told
+    where the debris fell; they detect it with their sensors and reroute.
 
     Args:
-        world: World to mutate in place.
-        num_new_walls: How many free cells become debris.
+        zone: Disaster zone to mutate in place.
+        num_debris: How many free cells become debris.
         robot_cells: Current robot positions (protected from debris).
         rng: Seeded random generator.
 
     Returns:
-        The list of cells that became walls.
+        The new :class:`Debris` records.
     """
     robots = set(robot_cells)
-    protected = robots | set(world.survivors)
+    protected = robots | set(zone.survivor_cells)
     free_cells = [
-        (int(r), int(c)) for r, c in zip(*np.nonzero(world.grid == FREE))
+        (int(r), int(c)) for r, c in zip(*np.nonzero(zone.grid == FREE))
         if (int(r), int(c)) not in protected
     ]
-    count = min(num_new_walls, len(free_cells))
+    count = min(num_debris, len(free_cells))
     picks = rng.choice(len(free_cells), size=count, replace=False) if count else []
-    new_walls = [free_cells[int(i)] for i in sorted(picks)]
-    for cell in new_walls:
-        world.grid[cell] = WALL
-    world.new_walls.extend(new_walls)
-    world.reachable_mask = reachable(world.grid, robots)
-    return new_walls
+    new_cells = [free_cells[int(i)] for i in sorted(picks)]
+    for cell in new_cells:
+        zone.grid[cell] = DEBRIS
+    zone.aftershock_debris.extend(new_cells)
+    zone.reachable_mask = reachable(zone.grid, robots)
+    return [Debris(cell, "aftershock") for cell in new_cells]

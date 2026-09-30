@@ -81,3 +81,13 @@ def test_priorities_and_validation(good_result: SimulationResult, default_cfg: S
     with pytest.raises(ValueError):
         advise([], default_cfg)
     assert all(r.format().startswith("[") for r in advise(good_result, default_cfg))
+
+
+def test_mission_advisor_class(good_result: SimulationResult, default_cfg: SwarmConfig) -> None:
+    """MissionAdvisor gives the same advice as advise() and validates priority."""
+    from swarmrescue.advisor import MissionAdvisor
+
+    advisor = MissionAdvisor("speed")
+    assert advisor.advise(good_result, default_cfg) == advise(good_result, default_cfg, "speed")
+    with pytest.raises(ValueError):
+        MissionAdvisor("panic")

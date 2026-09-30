@@ -1,7 +1,8 @@
-"""Rule-based Mission Advisor.
+"""Rule-based Mission Advisor for the search-and-rescue operator.
 
-Turns simulation metrics and operator preferences into plain-English
-recommendations with concrete parameter changes. Fully offline and
+Turns mission metrics (coverage, survivors found, energy and battery use,
+collisions, decision latency) and operator preferences into plain-English
+recommendations with concrete parameter changes. It is fully offline and
 deterministic: no language model, no network, no API keys.
 """
 
@@ -197,3 +198,30 @@ def advise(
         ))
 
     return sorted(recs, key=lambda r: SEVERITY_ORDER[r.severity])
+
+
+class MissionAdvisor:
+    """Expert-system advisor attached to Mission Control.
+
+    Attributes:
+        priority: Operator goal: ``balanced``, ``coverage``, ``speed`` or ``energy``.
+    """
+
+    def __init__(self, priority: str = "balanced") -> None:
+        """Create an advisor for the given operator priority.
+
+        Raises:
+            ValueError: If ``priority`` is unknown.
+        """
+        if priority not in PRIORITIES:
+            raise ValueError(f"priority must be one of {PRIORITIES}")
+        self.priority = priority
+
+    def advise(
+        self,
+        results: SimulationResult | Sequence[SimulationResult],
+        cfg: SwarmConfig,
+        pso: PSOResult | None = None,
+    ) -> list[Recommendation]:
+        """Recommendations for these mission results (see :func:`advise`)."""
+        return advise(results, cfg, self.priority, pso)

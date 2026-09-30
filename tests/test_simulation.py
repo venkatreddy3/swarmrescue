@@ -7,9 +7,9 @@ import pytest
 
 from swarmrescue.config import SwarmConfig
 from swarmrescue.simulation import (
-    SimulationResult, compute_coverage, compute_fitness, simulate,
+    MissionControl, SimulationResult, compute_coverage, compute_fitness, simulate,
 )
-from swarmrescue.world import FREE, WALL
+from swarmrescue.world import FREE, WALL, Aftershock
 
 MANY_SEEDS = range(25)
 
@@ -147,3 +147,23 @@ def test_invalid_round_rejected() -> None:
     """Only rounds 1 and 2 exist."""
     with pytest.raises(ValueError):
         simulate(SwarmConfig(), round_no=3)
+
+
+def test_mission_control_records_aftershock(default_cfg: SwarmConfig) -> None:
+    """Round 2 records one Aftershock: debris count, failed robot, radio lost."""
+    mission = MissionControl(default_cfg.with_updates(seed=4), round_no=2)
+    result = mission.run()
+    shock = result.aftershock
+    assert isinstance(shock, Aftershock)
+    assert shock.tick == default_cfg.shift_tick
+    assert len(shock.debris) == default_cfg.new_walls
+    assert shock.failed_robot_id == 0 and shock.radio_lost
+    assert not mission.radio.online and not mission.robots[0].alive
+    assert simulate(default_cfg.with_updates(seed=4)).aftershock is None
+
+
+def test_mission_control_matches_simulate(default_cfg: SwarmConfig) -> None:
+    """simulate() is a thin wrapper around MissionControl.run()."""
+    a = MissionControl(default_cfg.with_updates(seed=5)).run()
+    b = simulate(default_cfg.with_updates(seed=5))
+    assert a.fitness == b.fitness and a.final_positions == b.final_positions

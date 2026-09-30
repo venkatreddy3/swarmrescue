@@ -1,85 +1,101 @@
-"""Decentralized coordination: peer-to-peer perception and map sharing.
+"""Decentralized coordination: the robots' radio link and local perception.
 
-There is no central controller. Robots only exchange information with
-teammates inside their communication radius, and only perceive nearby robots.
+There is no central controller and so no single point of failure. Robots
+only exchange pheromone trails and debris maps with teammates inside radio
+range, and they only perceive nearby robots.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from swarmrescue.agent import Agent
+from swarmrescue.agent import Robot
 from swarmrescue.world import Cell, manhattan
 
-# Once communication fails, robots can only detect others with proximity sensors.
+# Once the radio link fails, robots can only detect others with proximity sensors.
 PROXIMITY_RANGE: int = 2
 
 
-def perception_radius(comm_enabled: bool, comm_range: int) -> int:
-    """Radius within which a robot can locate teammates.
+class RadioLink:
+    """Peer-to-peer radio shared by the swarm.
 
-    Args:
-        comm_enabled: Whether the radio link is working.
-        comm_range: Configured radio range.
-
-    Returns:
-        ``comm_range`` with radio, else the short proximity-sensor range.
-        Always at least 2, so adjacent robots are always seen.
+    Attributes:
+        comm_range: Manhattan radio range.
+        online: False after the aftershock cuts the radio link.
     """
-    return max(comm_range, PROXIMITY_RANGE) if comm_enabled else PROXIMITY_RANGE
+
+    def __init__(self, comm_range: int) -> None:
+        """Create a working radio link with the given range."""
+        self.comm_range: int = comm_range
+        self.online: bool = True
+
+    def cut(self) -> None:
+        """Take the radio link down (Round 2 aftershock)."""
+        self.online = False
+
+    @property
+    def perception_radius(self) -> int:
+        """Radius within which a robot can locate teammates.
+
+        This is the radio range while the link is up, and otherwise the short
+        proximity-sensor range. It is always at least 2, so adjacent robots
+        are always seen and movement stays collision-free.
+        """
+        return max(self.comm_range, PROXIMITY_RANGE) if self.online else PROXIMITY_RANGE
+
+    def share_pheromone_trails(self, robots: list[Robot]) -> int:
+        """Merge pheromone trails and debris maps between robots in range.
+
+        Merging is single-hop and order-independent. Every robot combines its
+        maps with a snapshot of each in-range teammate's maps using an
+        element-wise maximum: debris beats free, free beats unknown, and the
+        stronger pheromone wins. Failed robots do not transmit.
+
+        Args:
+            robots: The swarm.
+
+        Returns:
+            Number of undirected radio links used this tick (0 when offline).
+        """
+        if not self.online:
+            return 0
+        alive = [r for r in robots if r.alive]
+        snapshot = {r.robot_id: (r.trail.copy(), r.known.copy()) for r in alive}
+        links = 0
+        for i, a in enumerate(alive):
+            for b in alive[i + 1:]:
+                if manhattan(a.pos, b.pos) > self.comm_range:
+                    continue
+                links += 1
+                trail_b, known_b = snapshot[b.robot_id]
+                trail_a, known_a = snapshot[a.robot_id]
+                a.trail.merge(trail_b)
+                np.maximum(a.known, known_b, out=a.known)
+                b.trail.merge(trail_a)
+                np.maximum(b.known, known_a, out=b.known)
+        return links
 
 
-def perceive(agent: Agent, agents: list[Agent], radius: int) -> tuple[set[Cell], list[Cell]]:
-    """What ``agent`` can locally perceive about its teammates.
+def perceive_teammates(robot: Robot, robots: list[Robot], radius: int) -> tuple[set[Cell], list[Cell]]:
+    """What ``robot`` can locally perceive about its teammates.
 
     Args:
-        agent: The observing robot.
-        agents: The whole swarm (only nearby members are returned).
+        robot: The observing robot.
+        robots: The whole swarm (only nearby members are returned).
         radius: Manhattan perception radius.
 
     Returns:
-        ``(blocked, others)``: cells occupied by any perceived robot
-        (including failed ones, which are physical obstacles), and positions of
-        perceived *working* robots used for the crowding term.
+        ``(blocked, others)``. ``blocked`` holds the cells occupied by any
+        perceived robot, including failed ones, which are physical obstacles;
+        avoiding them keeps movement collision-free. ``others`` holds the
+        positions of perceived *working* robots, used for the crowding term.
     """
     blocked: set[Cell] = set()
     others: list[Cell] = []
-    for other in agents:
-        if other is agent or manhattan(agent.pos, other.pos) > radius:
+    for other in robots:
+        if other is robot or manhattan(robot.pos, other.pos) > radius:
             continue
         blocked.add(other.pos)
         if other.alive:
             others.append(other.pos)
     return blocked, others
-
-
-def share_maps(agents: list[Agent], comm_range: int) -> int:
-    """Merge pheromone and wall maps between robots in radio range.
-
-    Merging is single-hop and order-independent: every robot combines its own
-    maps with a snapshot of each in-range teammate's maps via ``np.maximum``
-    (walls dominate free, free dominates unknown; visit counts take the max).
-    Failed robots do not communicate.
-
-    Args:
-        agents: The swarm.
-        comm_range: Manhattan radio range.
-
-    Returns:
-        Number of undirected communication links used this tick.
-    """
-    alive = [a for a in agents if a.alive]
-    snapshot = {a.agent_id: (a.visits.copy(), a.known.copy()) for a in alive}
-    links = 0
-    for i, a in enumerate(alive):
-        for b in alive[i + 1:]:
-            if manhattan(a.pos, b.pos) > comm_range:
-                continue
-            links += 1
-            vb, kb = snapshot[b.agent_id]
-            va, ka = snapshot[a.agent_id]
-            np.maximum(a.visits, vb, out=a.visits)
-            np.maximum(a.known, kb, out=a.known)
-            np.maximum(b.visits, va, out=b.visits)
-            np.maximum(b.known, ka, out=b.known)
-    return links
