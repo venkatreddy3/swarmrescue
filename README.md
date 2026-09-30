@@ -17,9 +17,9 @@ turns the results into plain-English advice for the human operator.
 
 | | Link | Notes |
 |---|---|---|
-| **Primary demo (loads instantly)** | **Vercel:** `https://YOUR-PROJECT.vercel.app` *(replace with the deployed URL)* | [`web/index.html`](web/index.html) is a single 25 KB page with a live JavaScript port of the swarm, an **Aftershock** button, live metrics and the real results table. It makes no network requests. |
-| Full Mission Control dashboard | **Streamlit:** `https://YOUR-APP.streamlit.app` *(replace with the deployed URL)* | [`app.py`](app.py) runs the Python simulator with PSO tuning and the Mission Advisor. It may take a while to wake up on a free tier, which is why the Vercel page is the primary demo. |
-| Demo video | *Coming soon: add the video link here* | |
+| **Primary demo (loads instantly)** | **Vercel: https://swarmrescue-web.vercel.app/** | [`web/index.html`](web/index.html) is a single 26 KB page with a live JavaScript port of the swarm, an **Aftershock** button, live metrics and the real results table. It makes no network requests. |
+| Full Mission Control dashboard | **Streamlit: https://swarmrescue.streamlit.app/** | [`app.py`](app.py) runs the Python simulator with PSO tuning and the Mission Advisor. It may take a while to wake up on a free tier, which is why the Vercel page is the primary demo. |
+| Demo video | *Coming soon* | |
 | Source | https://github.com/venkatreddy3/swarmrescue | |
 
 **Deploying the Vercel page:** import the repository into Vercel, set **Root Directory = `web`** and
@@ -257,7 +257,7 @@ Every numeric flag is range-checked. For example, `--agents 0`, `--particles 999
 **Optional settings.** Copy [`.env.example`](.env.example) to `.env` to change `SWARM_SEED` (the
 default seeds) or `LOG_LEVEL`. No secrets are needed anywhere; see [SECURITY.md](SECURITY.md).
 
-**Tests** (148 tests, about 15 s)
+**Tests** (163 tests, about 20 s)
 
 ```bash
 python -m pytest
@@ -486,7 +486,7 @@ for innovation; added `.env.example`, `SECURITY.md` and an SDG section.
 
 1. **Efficiency: instant-load Vercel page.** The auditor's probe timed out on the Streamlit URL
    (free-tier cold start), so [`web/index.html`](web/index.html) is now the primary demo.
-   - It is a single 25 KB file with inline CSS and JS, no frameworks and no network requests.
+   - It is a single 26 KB file with inline CSS and JS, no frameworks and no network requests.
    - It runs a live JavaScript port of the swarm with an Aftershock button.
    - `web/vercel.json` adds a hash-pinned CSP.
    - A headless Node test runs the page's own JavaScript on 16 maps and asserts zero collisions.
@@ -517,6 +517,21 @@ for innovation; added `.env.example`, `SECURITY.md` and an SDG section.
      under `docs/`, and a Demo section.
    - The dashboard legend no longer overlaps the axis label.
    - The dashboard gained adaptive-feature toggles and a time-to-first-survivor metric.
+7. **Fix: Streamlit Cloud `TypeError` when selecting Round 2.**
+   - **Cause:** `app.py` passed the new Attempt 2 keys (`use_pings`, `ping_range`, `use_evaporation`,
+     `evaporation_rate`) to a stale Attempt 1 `SwarmConfig`. That old module was still imported in the
+     long-running Streamlit Cloud process, so construction failed with *unexpected keyword argument*.
+   - **Fix:** the dashboard now passes only the fields the loaded `SwarmConfig` accepts, and shows a
+     "reboot the app" warning if any were dropped. It also repairs stale or invalid session-state
+     weights before the widgets are created, and "Apply tuned weights" copies only known keys, clamped
+     to their bounds.
+   - **Tests:** regression tests build the config exactly as the app does, for Round 1, Round 2, and
+     after *Apply tuned weights*, including with stale session values.
+8. **Real end-of-mission reasons.** The web page, the dashboard and the CLI now explain why a mission
+   stopped, for example: *"Mission ended at tick 253: robot batteries depleted (85% coverage, 4 of 5
+   survivors found, 0 collisions)."* The possible reasons are: complete, batteries depleted, time
+   limit, all robots failed, or nothing left to search.
+9. **Live links.** The README and the web page now point to the deployed Vercel and Streamlit apps.
 
 ### Attempt 1
 
@@ -554,7 +569,7 @@ swarmrescue/
 │   └── vercel.json      # security headers + hash-pinned CSP
 ├── docs/                # screenshots (web-demo.png, dashboard-map.png)
 ├── scripts/ablation.py  # pings / evaporation ablation study
-├── tests/               # 148 tests: world, agent, simulation, optimizer, advisor, evaporation,
+├── tests/               # 163 tests: world, agent, simulation, optimizer, advisor, evaporation,
 │                        #   pings, security, CLI, Streamlit AppTest, web page (+ headless JS run)
 ├── main.py              # CLI
 ├── app.py               # Streamlit Rescue Mission Control

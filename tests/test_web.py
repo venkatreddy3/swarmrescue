@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 
 WEB = Path(__file__).resolve().parents[1] / "web"
+VERCEL_URL = "https://swarmrescue-web.vercel.app/"
+STREAMLIT_URL = "https://swarmrescue.streamlit.app/"
 HTML = (WEB / "index.html").read_text(encoding="utf-8")
 SCRIPT = re.search(r"<script>(.*?)</script>", HTML, re.S).group(1)
 STYLE = re.search(r"<style>(.*?)</style>", HTML, re.S).group(1)
@@ -62,7 +64,8 @@ def test_page_is_tiny_and_self_contained() -> None:
     for forbidden in ("fetch(", "XMLHttpRequest", "WebSocket", "localStorage", "document.cookie", "import("):
         assert forbidden not in SCRIPT, forbidden
     external = re.findall(r"(?:src|href)=\"(https?://[^\"]+)\"", HTML)
-    assert all(url.startswith("https://github.com/venkatreddy3/swarmrescue") for url in external)
+    assert all(url.startswith(("https://github.com/venkatreddy3/swarmrescue", STREAMLIT_URL)) for url in external)
+    assert not re.findall(r"src=\"https?://", HTML)  # links only; nothing is loaded from elsewhere
 
 
 def test_page_metadata_and_semantics() -> None:
@@ -94,8 +97,15 @@ def test_page_shows_real_results_and_links() -> None:
     """Results table carries the README numbers; dashboard and repo links exist."""
     for value in ("126.95", "128.06", "116.94", "123.02"):
         assert value in HTML
-    assert 'id="dashboard-link"' in HTML
+    assert f'<a id="dashboard-link" href="{STREAMLIT_URL}">' in HTML
     assert 'href="https://github.com/venkatreddy3/swarmrescue"' in HTML
+
+
+def test_readme_has_real_demo_links() -> None:
+    """README lists the deployed Vercel and Streamlit URLs and no leftover placeholders."""
+    readme = (WEB.parent / "README.md").read_text(encoding="utf-8")
+    assert VERCEL_URL in readme and STREAMLIT_URL in readme
+    assert "YOUR-" not in readme and "replace with the deployed URL" not in readme
 
 
 def test_vercel_config_has_matching_csp() -> None:
