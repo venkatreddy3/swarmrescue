@@ -16,7 +16,8 @@ controller, so there is no single point of failure.
 from __future__ import annotations
 
 from collections import deque
-from typing import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -79,12 +80,12 @@ class PheromoneTrail:
         """True if ``cell`` has been searched according to this trail."""
         return bool(self.visited[cell])
 
-    def merge(self, other: "PheromoneTrail") -> None:
+    def merge(self, other: PheromoneTrail) -> None:
         """Combine with a teammate's trail (element-wise maximum)."""
         np.maximum(self.intensity, other.intensity, out=self.intensity)
         self.visited |= other.visited
 
-    def copy(self) -> "PheromoneTrail":
+    def copy(self) -> PheromoneTrail:
         """Independent deep copy (used for order-independent radio merges)."""
         clone = PheromoneTrail(self.intensity.shape[0])
         clone.intensity = self.intensity.copy()
@@ -125,14 +126,35 @@ def bfs_path(
                 continue
             parent[nb] = cell
             if goals[nb[0]][nb[1]]:
-                path = [nb]
-                prev = parent[nb]
-                while prev is not None:
-                    path.append(prev)
-                    prev = parent[prev]
-                return path[::-1]
+                return _trace_path(parent, nb)
             queue.append(nb)
     return None
+
+
+def _trace_path(parent: dict[Cell, Cell | None], goal: Cell) -> list[Cell]:
+    """Follow BFS parent links back from ``goal``; returns ``[start, ..., goal]``."""
+    path = [goal]
+    prev = parent[goal]
+    while prev is not None:
+        path.append(prev)
+        prev = parent[prev]
+    return path[::-1]
+
+
+@dataclass(frozen=True)
+class MoveContext:
+    """Everything a robot perceives when deciding one move."""
+
+    cfg: SwarmConfig
+    blocked: set[Cell]
+    others: list[Cell]
+    rng: np.random.Generator
+    pings: tuple[Cell, ...]
+    free_nbs: list[Cell]
+    options: list[Cell]
+
+
+Decision = tuple[str, Cell | None]
 
 
 def crowding(cell: Cell, others: Iterable[Cell]) -> float:
@@ -255,11 +277,11 @@ class Robot:
     ) -> Cell | None:
         """Decide this tick's move using only local knowledge.
 
-        Priority: deadlock breaker, then heading to a heard survivor ping, then
-        the pheromone rule (while an unvisited
-        neighbour exists), then a BFS reroute to the nearest unvisited
-        known-free cell, then (with evaporation) a patrol back to the nearest
-        stale cell, then idle to save battery.
+        Behaviours are tried in priority order and the first that decides wins:
+        off, deadlock breaker, survivor ping, pheromone rule (while an unvisited
+        neighbour exists), BFS reroute to the nearest unvisited known-free cell,
+        patrol back to a stale cell (evaporation only), otherwise idle to save
+        battery.
 
         Args:
             cfg: Mission configuration (behaviour weights).
@@ -271,47 +293,67 @@ class Robot:
         Returns:
             The neighbouring cell to move into, or ``None`` to stay put.
         """
-        if not self.active:
-            self.mode = MODE_OFF
-            return None
-        size = self.known.shape[0]
-        free_nbs = [nb for nb in neighbors4(self.pos, size) if self.known[nb] == FREE]
-        options = [nb for nb in free_nbs if nb not in blocked]
-
-        if self.stuck_ticks >= DEADLOCK_TICKS and options:
-            self.mode = MODE_DEADLOCK
-            return options[int(rng.integers(len(options)))]
-
-        step = self.home_in_on_ping(pings, blocked)
-        if step is not None:
-            self.mode = MODE_PING
-            return step
-
-        if any(not self.trail.is_visited(nb) for nb in free_nbs):
-            if not options:
-                self.mode = MODE_BLOCKED
-                return None
-            self.mode = MODE_PHEROMONE
-            scores = [self.score(nb, others, cfg, rng) for nb in options]
-            return options[int(np.argmin(scores))]
-
-        # All neighbours already searched: reroute to the nearest unsearched cell.
-        passable = self.known == FREE
-        frontier = passable & ~self.trail.visited
-        if frontier.any():
-            step = self._reroute(frontier, blocked, passable)
-            if step is not None:
-                self.mode = MODE_BFS
-                return step
-            self.mode = MODE_BLOCKED  # a teammate is in the way; wait
-            return None
-        if cfg.use_evaporation:
-            step = self._reroute(passable & self.trail.stale_mask(), blocked, passable)
-            if step is not None:
-                self.mode = MODE_PATROL  # re-sweep an area searched long ago
-                return step
+        free_nbs = [nb for nb in neighbors4(self.pos, self.known.shape[0]) if self.known[nb] == FREE]
+        ctx = MoveContext(cfg, blocked, others, rng, tuple(pings), free_nbs, [n for n in free_nbs if n not in blocked])
+        for behaviour in self._behaviours():
+            decision = behaviour(ctx)
+            if decision is not None:
+                self.mode, move = decision
+                return move
         self.mode = MODE_IDLE  # nothing left to search in my belief: save energy
         return None
+
+    def _behaviours(self) -> tuple[Callable[[MoveContext], Decision | None], ...]:
+        """Behaviours in priority order (see :meth:`choose_move`)."""
+        return (
+            self._switched_off,
+            self._break_deadlock,
+            self._follow_ping,
+            self._pheromone_rule,
+            self._reroute_to_frontier,
+            self._patrol_stale_area,
+        )
+
+    def _switched_off(self, ctx: MoveContext) -> Decision | None:
+        """A failed or flat robot never moves."""
+        return None if self.active else (MODE_OFF, None)
+
+    def _break_deadlock(self, ctx: MoveContext) -> Decision | None:
+        """After DEADLOCK_TICKS blocked ticks, take a random free neighbour."""
+        if self.stuck_ticks < DEADLOCK_TICKS or not ctx.options:
+            return None
+        return MODE_DEADLOCK, ctx.options[int(ctx.rng.integers(len(ctx.options)))]
+
+    def _follow_ping(self, ctx: MoveContext) -> Decision | None:
+        """Head for a survivor whose acoustic ping is heard."""
+        step = self.home_in_on_ping(ctx.pings, ctx.blocked)
+        return None if step is None else (MODE_PING, step)
+
+    def _pheromone_rule(self, ctx: MoveContext) -> Decision | None:
+        """Ant rule: lowest pheromone + crowding + noise among free neighbours."""
+        if all(self.trail.is_visited(nb) for nb in ctx.free_nbs):
+            return None
+        if not ctx.options:
+            return MODE_BLOCKED, None
+        scores = [self.score(nb, ctx.others, ctx.cfg, ctx.rng) for nb in ctx.options]
+        return MODE_PHEROMONE, ctx.options[int(np.argmin(scores))]
+
+    def _reroute_to_frontier(self, ctx: MoveContext) -> Decision | None:
+        """All neighbours searched: BFS reroute to the nearest unsearched known-free cell."""
+        passable = self.known == FREE
+        frontier = passable & ~self.trail.visited
+        if not frontier.any():
+            return None
+        step = self._reroute(frontier, ctx.blocked, passable)
+        return (MODE_BFS, step) if step is not None else (MODE_BLOCKED, None)  # blocked: a teammate is in the way
+
+    def _patrol_stale_area(self, ctx: MoveContext) -> Decision | None:
+        """With evaporation, re-sweep the nearest area searched long ago."""
+        if not ctx.cfg.use_evaporation:
+            return None
+        passable = self.known == FREE
+        step = self._reroute(passable & self.trail.stale_mask(), ctx.blocked, passable)
+        return None if step is None else (MODE_PATROL, step)
 
     def commit(self, move: Cell | None) -> None:
         """Apply the outcome of this tick's decision.

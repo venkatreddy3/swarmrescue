@@ -43,6 +43,7 @@ class SwarmConfig:
         evaporation_rate: Fraction of pheromone lost per tick when enabled.
         use_pings: Enable survivor acoustic pings (tapping / phone signals).
         ping_range: Manhattan distance at which a robot hears a survivor.
+        latency_budget_ms: Real-time budget for one tick of swarm decisions.
     """
 
     grid_size: int = 20
@@ -63,12 +64,13 @@ class SwarmConfig:
     evaporation_rate: float = 0.01
     use_pings: bool = True
     ping_range: int = 4
+    latency_budget_ms: float = 50.0
 
     def __post_init__(self) -> None:
         """Validate every field, raising ``ValueError`` on bad values."""
         validate_config(self)
 
-    def with_updates(self, **changes: Any) -> "SwarmConfig":
+    def with_updates(self, **changes: Any) -> SwarmConfig:
         """Return a validated copy with ``changes`` applied."""
         return replace(self, **changes)
 
@@ -77,10 +79,64 @@ class SwarmConfig:
         return asdict(self)
 
 
+# Inclusive bounds for every numeric field. comm_range is further limited to 2*grid_size.
+INT_BOUNDS: dict[str, tuple[int, int]] = {
+    "grid_size": (5, 100),
+    "num_agents": (1, 20),
+    "num_survivors": (0, 50),
+    "max_ticks": (1, 5000),
+    "battery": (1, 100_000),
+    "comm_range": (1, 200),
+    "sense_range": (1, 5),
+    "shift_tick": (0, 5000),
+    "new_walls": (0, 2500),
+    "seed": (0, 2**32 - 1),
+    "ping_range": (1, 10),
+}
+FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
+    "wall_density": (0.0, 0.45),
+    "latency_budget_ms": (1.0, 1000.0),
+    **TUNABLE_BOUNDS,
+}
+BOOL_FIELDS: tuple[str, ...] = ("use_evaporation", "use_pings")
+
+
 def _require(condition: bool, message: str) -> None:
     """Raise ``ValueError(message)`` when ``condition`` is false."""
     if not condition:
         raise ValueError(message)
+
+
+def _validate_types(cfg: SwarmConfig) -> None:
+    """Every field has the right type (booleans are not accepted as numbers)."""
+    for name in INT_BOUNDS:
+        value = getattr(cfg, name)
+        _require(isinstance(value, int) and not isinstance(value, bool), f"{name} must be an integer, got {value!r}")
+    for name in FLOAT_BOUNDS:
+        value = getattr(cfg, name)
+        _require(
+            isinstance(value, int | float) and not isinstance(value, bool), f"{name} must be a number, got {value!r}"
+        )
+    for name in BOOL_FIELDS:
+        _require(isinstance(getattr(cfg, name), bool), f"{name} must be True or False")
+
+
+def _validate_ranges(cfg: SwarmConfig) -> None:
+    """Every numeric field lies inside its inclusive bounds (NaN is rejected)."""
+    for name, (lo, hi) in {**INT_BOUNDS, **FLOAT_BOUNDS}.items():
+        value = getattr(cfg, name)
+        _require(lo <= value <= hi, f"{name} must be in [{lo}, {hi}]")
+
+
+def _validate_feasibility(cfg: SwarmConfig) -> None:
+    """Cross-field checks: the mission must physically fit in the grid."""
+    area = cfg.grid_size * cfg.grid_size
+    _require(cfg.comm_range <= 2 * cfg.grid_size, "comm_range must be in [1, 2*grid_size]")
+    _require(
+        cfg.num_agents + cfg.num_survivors <= area * (1.0 - cfg.wall_density) / 4,
+        "too many robots + survivors for the free area of this grid",
+    )
+    _require(cfg.new_walls <= area // 4, "new_walls must be at most a quarter of the grid")
 
 
 def validate_config(cfg: SwarmConfig) -> None:
@@ -90,49 +146,9 @@ def validate_config(cfg: SwarmConfig) -> None:
         cfg: Configuration to validate.
 
     Raises:
-        ValueError: If any parameter is out of range or the types are wrong.
+        ValueError: If any parameter has the wrong type, is out of range, or the
+            combination cannot fit in the grid.
     """
-    int_fields = (
-        "grid_size", "num_agents", "num_survivors", "max_ticks", "battery",
-        "comm_range", "sense_range", "shift_tick", "new_walls", "seed", "ping_range",
-    )
-    for name in int_fields:
-        value = getattr(cfg, name)
-        _require(
-            isinstance(value, int) and not isinstance(value, bool),
-            f"{name} must be an integer, got {value!r}",
-        )
-    for name in ("use_evaporation", "use_pings"):
-        _require(isinstance(getattr(cfg, name), bool), f"{name} must be True or False")
-    for name in ("wall_density", "pheromone_weight", "spread_weight", "randomness", "evaporation_rate"):
-        value = getattr(cfg, name)
-        _require(
-            isinstance(value, (int, float)) and not isinstance(value, bool),
-            f"{name} must be a number, got {value!r}",
-        )
-
-    _require(5 <= cfg.grid_size <= 100, "grid_size must be in [5, 100]")
-    _require(0.0 <= cfg.wall_density <= 0.45, "wall_density must be in [0, 0.45]")
-    _require(1 <= cfg.num_agents <= 20, "num_agents must be in [1, 20]")
-    _require(0 <= cfg.num_survivors <= 50, "num_survivors must be in [0, 50]")
-    _require(1 <= cfg.max_ticks <= 5000, "max_ticks must be in [1, 5000]")
-    _require(1 <= cfg.battery <= 100000, "battery must be in [1, 100000]")
-    _require(1 <= cfg.comm_range <= 2 * cfg.grid_size, "comm_range must be in [1, 2*grid_size]")
-    _require(1 <= cfg.sense_range <= 5, "sense_range must be in [1, 5]")
-    _require(1 <= cfg.ping_range <= 10, "ping_range must be in [1, 10]")
-    _require(cfg.seed >= 0, "seed must be non-negative")
-    _require(cfg.new_walls >= 0, "new_walls must be non-negative")
-    _require(cfg.shift_tick >= 0, "shift_tick must be non-negative")
-    for name, (low, high) in TUNABLE_BOUNDS.items():
-        value = float(getattr(cfg, name))
-        _require(low <= value <= high, f"{name} must be in [{low}, {high}]")
-
-    free_cells_estimate = cfg.grid_size * cfg.grid_size * (1.0 - cfg.wall_density)
-    _require(
-        cfg.num_agents + cfg.num_survivors <= free_cells_estimate / 4,
-        "too many robots + survivors for the free area of this grid",
-    )
-    _require(
-        cfg.new_walls <= cfg.grid_size * cfg.grid_size // 4,
-        "new_walls must be at most a quarter of the grid",
-    )
+    _validate_types(cfg)
+    _validate_ranges(cfg)
+    _validate_feasibility(cfg)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -82,6 +84,7 @@ def test_time_to_first_survivor_metric() -> None:
 
 def test_pings_speed_up_rescue_on_average() -> None:
     """Averaged over 10 zones, pings find all survivors sooner (and never add collisions)."""
+
     def mean_all_found(use_pings: bool) -> float:
         total = 0.0
         for seed in range(1, 11):
@@ -94,7 +97,7 @@ def test_pings_speed_up_rescue_on_average() -> None:
 
 
 @pytest.mark.parametrize("bad", [{"ping_range": 0}, {"ping_range": 11}, {"use_pings": "yes"}])
-def test_ping_config_validation(bad: dict) -> None:
+def test_ping_config_validation(bad: dict[str, Any]) -> None:
     """Bad ping settings are rejected."""
     with pytest.raises(ValueError):
         SwarmConfig(**bad)

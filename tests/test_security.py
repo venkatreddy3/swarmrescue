@@ -12,9 +12,9 @@ from swarmrescue.settings import Settings, load_settings, parse_env_file
 
 ROOT = Path(__file__).resolve().parents[1]
 SECRET_PATTERNS = [
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),                 # OpenAI / Anthropic style keys
-    re.compile(r"AKIA[0-9A-Z]{16}"),                    # AWS access key id
-    re.compile(r"ghp_[A-Za-z0-9]{30,}"),                # GitHub token
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),  # OpenAI / Anthropic style keys
+    re.compile(r"AKIA[0-9A-Z]{16}"),  # AWS access key id
+    re.compile(r"ghp_[A-Za-z0-9]{30,}"),  # GitHub token
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),  # private keys
     re.compile(r"(?i)(api[_-]?key|secret|password|token)\s*=\s*['\"][^'\"]{8,}['\"]"),
 ]
@@ -78,9 +78,7 @@ def test_env_example_documents_settings_without_secrets() -> None:
 def test_no_secrets_in_tracked_files() -> None:
     """No tracked file contains anything that looks like a credential."""
     try:
-        files = subprocess.run(
-            ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
-        ).stdout.split()
+        files = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
     except (OSError, subprocess.CalledProcessError):
         pytest.skip("git not available")
     for name in files:

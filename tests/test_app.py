@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+from streamlit.testing.v1 import AppTest
 
-AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 APP = str(Path(__file__).resolve().parents[1] / "app.py")
 
 
-def page_text(at: "AppTest") -> str:
+def page_text(at: AppTest) -> str:
     """Concatenate captions, markdown and alert text on the page."""
     parts = [c.value for c in at.caption] + [m.value for m in at.markdown]
     parts += [a.value for kind in (at.success, at.info, at.warning, at.error) for a in kind]
@@ -49,8 +50,17 @@ import app  # noqa: E402
 from swarmrescue.config import TUNABLE_BOUNDS, SwarmConfig  # noqa: E402
 
 WIDGET_INPUTS = {
-    "grid_size": 20, "num_agents": 4, "wall_density": 0.18, "battery": 250, "num_survivors": 5,
-    "max_ticks": 300, "seed": 1, "new_walls": 25, "use_pings": True, "ping_range": 4, "use_evaporation": True,
+    "grid_size": 20,
+    "num_agents": 4,
+    "wall_density": 0.18,
+    "battery": 250,
+    "num_survivors": 5,
+    "max_ticks": 300,
+    "seed": 1,
+    "new_walls": 25,
+    "use_pings": True,
+    "ping_range": 4,
+    "use_evaporation": True,
 }
 
 
@@ -73,7 +83,7 @@ class OutdatedSwarmConfig:
 
 def test_build_config_matches_swarmconfig_fields() -> None:
     """The dashboard's kwargs construct a SwarmConfig with nothing dropped."""
-    state: dict = {}
+    state: dict[str, Any] = {}
     app.sanitize_weights(state)
     cfg, dropped = app.build_config_dict(WIDGET_INPUTS, state)
     assert dropped == []
@@ -83,7 +93,7 @@ def test_build_config_matches_swarmconfig_fields() -> None:
 
 def test_outdated_config_class_no_longer_crashes() -> None:
     """Root cause: new keys vs an old SwarmConfig raised TypeError; now they are filtered out."""
-    state: dict = {}
+    state: dict[str, Any] = {}
     app.sanitize_weights(state)
     full = {**WIDGET_INPUTS, **state}
     with pytest.raises(TypeError, match="unexpected keyword argument"):
@@ -95,8 +105,13 @@ def test_outdated_config_class_no_longer_crashes() -> None:
 
 def test_stale_session_values_are_repaired() -> None:
     """Strings, None, NaN, booleans and out-of-range values from old sessions are reset or clamped."""
-    state = {"pheromone_weight": "1.7", "spread_weight": None, "randomness": float("nan"),
-             "evaporation_rate": 9.0, "old_tuned_weight": 4.2}
+    state = {
+        "pheromone_weight": "1.7",
+        "spread_weight": None,
+        "randomness": float("nan"),
+        "evaporation_rate": 9.0,
+        "old_tuned_weight": 4.2,
+    }
     repaired = app.sanitize_weights(state)
     assert state["pheromone_weight"] == 1.7 and state["spread_weight"] == 0.5
     assert state["randomness"] == 0.1 and state["evaporation_rate"] == TUNABLE_BOUNDS["evaporation_rate"][1]
@@ -108,7 +123,7 @@ def test_stale_session_values_are_repaired() -> None:
 
 def test_apply_tuned_weights_only_copies_known_clamped_keys() -> None:
     """Tuned params are clamped, and unknown keys from any PSO result are ignored."""
-    state: dict = {}
+    state: dict[str, Any] = {}
     app.sanitize_weights(state)
     app.apply_tuned_weights(state, {"pheromone_weight": 2.3456, "evaporation_rate": 0.7, "legacy_weight": 1.0})
     assert state["pheromone_weight"] == 2.346 and state["evaporation_rate"] == 0.2

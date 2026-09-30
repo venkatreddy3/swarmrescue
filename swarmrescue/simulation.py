@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -20,7 +21,14 @@ from swarmrescue.agent import MODE_BLOCKED, MODE_IDLE, Robot
 from swarmrescue.config import SwarmConfig
 from swarmrescue.coordination import RadioLink, perceive_teammates
 from swarmrescue.world import (
-    DEBRIS, FREE, Aftershock, Cell, DisasterZone, drop_aftershock_debris, generate_disaster_zone, manhattan,
+    DEBRIS,
+    FREE,
+    Aftershock,
+    Cell,
+    DisasterZone,
+    drop_aftershock_debris,
+    generate_disaster_zone,
+    manhattan,
     reachable,
 )
 
@@ -139,13 +147,7 @@ def compute_fitness(
     where ``speed = 1 - tick_at_90 / max_ticks`` (0 if 90% coverage was never reached).
     """
     speed = 0.0 if tick_at_90 is None else 1.0 - tick_at_90 / max_ticks
-    return (
-        100.0 * coverage
-        + 20.0 * survivors_ratio
-        + 20.0 * speed
-        - 0.01 * energy_moves
-        - 100.0 * collisions
-    )
+    return 100.0 * coverage + 20.0 * survivors_ratio + 20.0 * speed - 0.01 * energy_moves - 100.0 * collisions
 
 
 REASON_COMPLETE = "every reachable cell searched and every survivor found"
@@ -174,22 +176,24 @@ def mission_end_reason(robots: list[Robot], complete: bool, time_up: bool, max_t
     if depleted == len(working):
         return "robot batteries depleted"
     if depleted:
-        return (f"{depleted} of {len(working)} working robots out of battery; "
-                "the rest have nothing left to search in their maps")
+        return (
+            f"{depleted} of {len(working)} working robots out of battery; "
+            "the rest have nothing left to search in their maps"
+        )
     return "robots have nothing left to search in their maps (remaining cells are cut off or unknown)"
 
 
-def format_end_message(
-    tick: int, reason: str, coverage: float, found: int, total: int, collisions: int
-) -> str:
+def format_end_message(tick: int, reason: str, coverage: float, found: int, total: int, collisions: int) -> str:
     """``"Mission ended at tick 253: robot batteries depleted (85% coverage, 4 of 5 survivors found, 0 collisions)."``
 
     Coverage is rounded *down*, so an unfinished search never reads as 100%.
     """
     verb = "complete" if reason == REASON_COMPLETE else "ended"
     pct = math.floor(coverage * 100 + 1e-9)
-    return (f"Mission {verb} at tick {tick}: {reason} "
-            f"({pct}% coverage, {found} of {total} survivors found, {collisions} collisions).")
+    return (
+        f"Mission {verb} at tick {tick}: {reason} "
+        f"({pct}% coverage, {found} of {total} survivors found, {collisions} collisions)."
+    )
 
 
 def compute_coverage(visited: np.ndarray, reachable_mask: np.ndarray) -> float:
@@ -224,7 +228,8 @@ def post_aftershock_reachable(grid: np.ndarray, robots: list[Robot], visited: np
         if not r.alive:
             blocked[r.pos] = DEBRIS
     mask = reachable(blocked, [r.pos for r in robots if r.alive])
-    return mask | (visited & (grid == FREE))
+    result: np.ndarray = mask | (visited & (grid == FREE))
+    return result
 
 
 class MissionControl:
@@ -291,7 +296,8 @@ class MissionControl:
         if not self.cfg.use_pings or not robot.active:
             return []
         return [
-            s.cell for s in self.zone.survivors
+            s.cell
+            for s in self.zone.survivors
             if not self.found[s.survivor_id] and manhattan(robot.pos, s.cell) <= self.cfg.ping_range
         ]
 
@@ -305,9 +311,11 @@ class MissionControl:
         This stress-tests the swarm for a single point of failure. The robots
         are not told what changed; they must sense the debris and reroute.
         """
-        debris = drop_aftershock_debris(self.zone, self.cfg.new_walls, [r.pos for r in self.robots], self.aftershock_rng)
+        debris = drop_aftershock_debris(
+            self.zone, self.cfg.new_walls, [r.pos for r in self.robots], self.aftershock_rng
+        )
         failed = None
-        if FAILED_ROBOT_ID < len(self.robots):
+        if len(self.robots) > FAILED_ROBOT_ID:
             self.robots[FAILED_ROBOT_ID].fail()
             failed = FAILED_ROBOT_ID
         self.radio.cut()
@@ -320,16 +328,25 @@ class MissionControl:
         self.tick = tick
         if self.round_no == 2 and tick == self.aftershock_tick:
             self.trigger_aftershock(tick)
-
         start = time.perf_counter()
+        self._sense_and_share()
+        previous = [r.pos for r in self.robots]
+        self._move_robots(set(previous))
+        self.latencies.append((time.perf_counter() - start) * 1000.0)
+        self.collisions += count_collisions(self.robots, self.zone.grid, previous)
+        self._record_search()
+
+    def _sense_and_share(self) -> None:
+        """Every robot senses debris, trails evaporate (optional), the radio link shares trails."""
         for r in self.robots:
             self.wall_surprises += r.sense_debris(self.zone.grid, self.cfg.sense_range)
             if self.cfg.use_evaporation and r.alive:
                 r.trail.evaporate(self.cfg.evaporation_rate)
         self.radio.share_pheromone_trails(self.robots)
+
+    def _move_robots(self, occupied: set[Cell]) -> None:
+        """Robots decide and move one after another (collision-free by construction)."""
         radius = self.radio.perception_radius
-        previous = [r.pos for r in self.robots]
-        occupied = set(previous)
         for r in self.robots:
             blocked, others = perceive_teammates(r, self.robots, radius)
             pings = self.heard_pings(r)
@@ -343,10 +360,6 @@ class MissionControl:
                 occupied.discard(r.pos)
                 occupied.add(move)
             r.commit(move)
-        self.latencies.append((time.perf_counter() - start) * 1000.0)
-
-        self.collisions += count_collisions(self.robots, self.zone.grid, previous)
-        self._record_search()
 
     def snapshot(self, tick: int, coverage: float) -> Frame:
         """Build an immutable :class:`Frame` of the current state."""
@@ -360,47 +373,41 @@ class MissionControl:
             coverage=coverage,
         )
 
+    def swarm_done(self) -> bool:
+        """True when no robot can or wants to move (failed, flat battery or idle)."""
+        return all(not r.active or r.mode == MODE_IDLE for r in self.robots)
+
     def run(self) -> SimulationResult:
         """Run the mission to completion and return its metrics."""
-        cfg = self.cfg
-        coverage = self.coverage()
-        tick_at_90: int | None = 0 if coverage >= COVERAGE_TARGET else None
-        curve = [coverage]
-        frames = [self.snapshot(0, coverage)] if self.record_frames else []
-        ticks_run = 0
-        complete = False
-        for tick in range(1, cfg.max_ticks + 1):
-            ticks_run = tick
+        start = self.coverage()
+        progress = _Progress(start, [self.snapshot(0, start)] if self.record_frames else [])
+        for tick in range(1, self.cfg.max_ticks + 1):
             self.step(tick)
-            coverage = self.coverage()
-            curve.append(coverage)
-            if tick_at_90 is None and coverage >= COVERAGE_TARGET:
-                tick_at_90 = tick
-            if self.record_frames:
-                frames.append(self.snapshot(tick, coverage))
+            progress.update(tick, self.coverage(), self.snapshot if self.record_frames else None)
+            progress.complete = progress.coverage >= 1.0 and all(self.found)
             aftershock_pending = self.round_no == 2 and tick < self.aftershock_tick
-            swarm_done = all(not r.active or r.mode == MODE_IDLE for r in self.robots)
-            complete = coverage >= 1.0 and all(self.found)
-            if not aftershock_pending and (swarm_done or complete):
+            if not aftershock_pending and (self.swarm_done() or progress.complete):
                 break
-        time_up = not complete and ticks_run >= cfg.max_ticks and not all(
-            not r.active or r.mode == MODE_IDLE for r in self.robots
-        )
+        return self._result(progress)
 
+    def _result(self, p: _Progress) -> SimulationResult:
+        """Package the finished mission as a :class:`SimulationResult`."""
+        cfg = self.cfg
+        time_up = not p.complete and p.ticks_run >= cfg.max_ticks and not self.swarm_done()
         energy = sum(r.moves for r in self.robots)
         ratio = sum(self.found) / len(self.found) if self.found else 1.0
         return SimulationResult(
             round_no=self.round_no,
             seed=cfg.seed,
-            coverage=coverage,
+            coverage=p.coverage,
             survivors_found=sum(self.found),
             survivors_total=len(self.found),
-            tick_at_90=tick_at_90,
-            ticks_run=ticks_run,
+            tick_at_90=p.tick_at_90,
+            ticks_run=p.ticks_run,
             energy_moves=energy,
             collisions=self.collisions,
-            fitness=compute_fitness(coverage, ratio, tick_at_90, cfg.max_ticks, energy, self.collisions),
-            max_latency_ms=max(self.latencies) if self.latencies else 0.0,
+            fitness=compute_fitness(p.coverage, ratio, p.tick_at_90, cfg.max_ticks, energy, self.collisions),
+            max_latency_ms=max(self.latencies, default=0.0),
             mean_latency_ms=float(np.mean(self.latencies)) if self.latencies else 0.0,
             reachable_cells=int(self.reachable_mask.sum()),
             visited_cells=int((self.visited & self.reachable_mask).sum()),
@@ -413,13 +420,40 @@ class MissionControl:
             alive=tuple(r.alive for r in self.robots),
             survivors=tuple(self.zone.survivor_cells),
             found=tuple(self.found),
-            coverage_curve=tuple(curve),
-            frames=tuple(frames),
+            coverage_curve=tuple(p.curve),
+            frames=tuple(p.frames),
             aftershock=self.aftershock,
             survivor_found_ticks=tuple(self.found_ticks),
             ping_detections=self.ping_detections,
-            end_reason=mission_end_reason(self.robots, complete, time_up, cfg.max_ticks),
+            end_reason=mission_end_reason(self.robots, p.complete, time_up, cfg.max_ticks),
         )
+
+
+@dataclass
+class _Progress:
+    """Per-tick bookkeeping of a running mission (coverage curve, milestones, frames)."""
+
+    coverage: float
+    frames: list[Frame]
+    ticks_run: int = 0
+    complete: bool = False
+    curve: list[float] = field(default_factory=list)
+    tick_at_90: int | None = None
+
+    def __post_init__(self) -> None:
+        """Start the curve at tick 0."""
+        self.curve.append(self.coverage)
+        if self.coverage >= COVERAGE_TARGET:
+            self.tick_at_90 = 0
+
+    def update(self, tick: int, coverage: float, snapshot: Callable[[int, float], Frame] | None) -> None:
+        """Record the state after ``tick``."""
+        self.ticks_run, self.coverage = tick, coverage
+        self.curve.append(coverage)
+        if self.tick_at_90 is None and coverage >= COVERAGE_TARGET:
+            self.tick_at_90 = tick
+        if snapshot is not None:
+            self.frames.append(snapshot(tick, coverage))
 
 
 def simulate(cfg: SwarmConfig, round_no: int = 1, record_frames: bool = False) -> SimulationResult:

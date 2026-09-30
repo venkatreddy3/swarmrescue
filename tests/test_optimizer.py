@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import itertools
+from itertools import pairwise
+
 import pytest
 
 from swarmrescue.config import TUNABLE_BOUNDS, SwarmConfig
@@ -14,7 +17,9 @@ SEEDS = (1, 2)
 @pytest.fixture(scope="module")
 def tiny_cfg() -> SwarmConfig:
     """A small mission so PSO tests run in seconds."""
-    return SwarmConfig(grid_size=10, num_agents=2, num_survivors=2, max_ticks=80, battery=80, shift_tick=20, new_walls=5)
+    return SwarmConfig(
+        grid_size=10, num_agents=2, num_survivors=2, max_ticks=80, battery=80, shift_tick=20, new_walls=5
+    )
 
 
 @pytest.fixture(scope="module")
@@ -29,7 +34,7 @@ def test_best_fitness_never_decreases(pso_run: tuple[PSOResult, list[IterationLo
     """Global best is monotone non-decreasing across iterations."""
     result, _ = pso_run
     bests = [h.best_fitness for h in result.history]
-    assert all(b2 >= b1 for b1, b2 in zip(bests, bests[1:]))
+    assert all(b2 >= b1 for b1, b2 in itertools.pairwise(bests))
     assert result.best_fitness == bests[-1] == max(bests)
 
 
@@ -39,7 +44,9 @@ def test_never_worse_than_baseline(pso_run: tuple[PSOResult, list[IterationLog]]
     assert result.best_fitness >= result.baseline_fitness
 
 
-def test_params_within_bounds_and_reproducible(pso_run: tuple[PSOResult, list[IterationLog]], tiny_cfg: SwarmConfig) -> None:
+def test_params_within_bounds_and_reproducible(
+    pso_run: tuple[PSOResult, list[IterationLog]], tiny_cfg: SwarmConfig
+) -> None:
     """Best params respect bounds and re-evaluate to the reported fitness."""
     result, _ = pso_run
     for name, value in result.best_params.items():
@@ -77,4 +84,5 @@ def test_pso_tunes_evaporation_rate_when_enabled(tiny_cfg: SwarmConfig) -> None:
     result = run_pso(tiny_cfg.with_updates(use_evaporation=True), seeds=(1,), n_particles=3, n_iters=1, rng_seed=1)
     low, high = TUNABLE_BOUNDS["evaporation_rate"]
     assert low <= result.best_params["evaporation_rate"] <= high
-    assert all(b >= a for a, b in zip([h.best_fitness for h in result.history], [h.best_fitness for h in result.history][1:]))
+    bests = [h.best_fitness for h in result.history]
+    assert all(b >= a for a, b in pairwise(bests))

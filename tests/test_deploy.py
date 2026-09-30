@@ -99,7 +99,9 @@ def test_changed_source_is_purged_and_reimported(fake_package: tuple[Path, str])
     assert fresh.REASON_COMPLETE == "done"
 
 
-def test_old_or_foreign_copies_are_purged(fake_package: tuple[Path, str], tmp_path_factory: pytest.TempPathFactory) -> None:
+def test_old_or_foreign_copies_are_purged(
+    fake_package: tuple[Path, str], tmp_path_factory: pytest.TempPathFactory
+) -> None:
     """A copy without an import timestamp (pre-fix code) or loaded from elsewhere is stale."""
     root, package = fake_package
     other = tmp_path_factory.mktemp("elsewhere")

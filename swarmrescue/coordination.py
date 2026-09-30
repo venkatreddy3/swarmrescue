@@ -63,7 +63,7 @@ class RadioLink:
         snapshot = {r.robot_id: (r.trail.copy(), r.known.copy()) for r in alive}
         links = 0
         for i, a in enumerate(alive):
-            for b in alive[i + 1:]:
+            for b in alive[i + 1 :]:
                 if manhattan(a.pos, b.pos) > self.comm_range:
                     continue
                 links += 1

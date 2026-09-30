@@ -10,9 +10,9 @@ in reachable cells. In Round 2 an :class:`Aftershock` drops new
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Iterable, Iterator
 
 import numpy as np
 
@@ -137,6 +137,11 @@ def manhattan(a: Cell, b: Cell) -> int:
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
 
+def cells_where(mask: np.ndarray) -> list[Cell]:
+    """Cells where ``mask`` is True, in row-major order (vectorised with ``np.argwhere``)."""
+    return [(int(r), int(c)) for r, c in np.argwhere(mask)]
+
+
 def bfs_distances(grid: np.ndarray, sources: Iterable[Cell]) -> np.ndarray:
     """Multi-source BFS distances over free cells.
 
@@ -200,10 +205,10 @@ def generate_disaster_zone(cfg: SwarmConfig, rng: np.random.Generator) -> Disast
         if mask.sum() < max(needed, 0.4 * free_total):
             continue
         # Robots start at the reachable cells closest to the entry point.
-        order = sorted(zip(*np.nonzero(mask)), key=lambda rc: (dist[rc], rc))
+        order = sorted(cells_where(mask), key=lambda rc: (dist[rc], rc))
         entry_cells = [(int(r), int(c)) for r, c in order[: cfg.num_agents]]
         # Survivors are trapped in reachable cells away from the robots.
-        candidates = [(int(r), int(c)) for r, c in order[cfg.num_agents:]]
+        candidates = [(int(r), int(c)) for r, c in order[cfg.num_agents :]]
         picks = rng.choice(len(candidates), size=cfg.num_survivors, replace=False)
         survivors = [Survivor(i, candidates[int(p)]) for i, p in enumerate(sorted(picks))]
         return DisasterZone(grid=grid, entry_cells=entry_cells, survivors=survivors, reachable_mask=mask)
@@ -233,13 +238,10 @@ def drop_aftershock_debris(
     """
     robots = set(robot_cells)
     protected = robots | set(zone.survivor_cells)
-    free_cells = [
-        (int(r), int(c)) for r, c in zip(*np.nonzero(zone.grid == FREE))
-        if (int(r), int(c)) not in protected
-    ]
+    free_cells = [cell for cell in cells_where(zone.grid == FREE) if cell not in protected]
     count = min(num_debris, len(free_cells))
-    picks = rng.choice(len(free_cells), size=count, replace=False) if count else []
-    new_cells = [free_cells[int(i)] for i in sorted(picks)]
+    picks: list[int] = sorted(int(i) for i in rng.choice(len(free_cells), size=count, replace=False)) if count else []
+    new_cells = [free_cells[i] for i in picks]
     for cell in new_cells:
         zone.grid[cell] = DEBRIS
     zone.aftershock_debris.extend(new_cells)

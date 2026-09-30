@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -70,7 +72,7 @@ def test_pso_search_space_includes_rate_only_when_enabled() -> None:
 
 
 @pytest.mark.parametrize("bad", [{"evaporation_rate": 0.5}, {"evaporation_rate": -0.01}, {"use_evaporation": 1}])
-def test_evaporation_config_validation(bad: dict) -> None:
+def test_evaporation_config_validation(bad: dict[str, Any]) -> None:
     """Out-of-range rates and non-boolean flags are rejected."""
     with pytest.raises(ValueError):
         SwarmConfig(**bad)

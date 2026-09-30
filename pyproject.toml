@@ -1,0 +1,76 @@
+[project]
+name = "swarmrescue"
+version = "3.0.0"
+description = "Decentralized ant-pheromone multi-robot exploration for disaster-zone search and rescue"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+# Runtime dependencies are pinned in requirements.txt and dev tools in
+# requirements-dev.txt. The project is intentionally never pip-installed on the
+# deployment server (see tests/test_deploy.py).
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".devcontainer"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "UP",       # pyupgrade
+    "SIM",      # simplify
+    "C4",       # comprehensions
+    "N",        # pep8-naming
+    "S",        # flake8-bandit (security)
+    "RUF",      # ruff-specific
+    "C90",      # mccabe complexity
+    "PL",       # pylint (includes too-many-statements / branches)
+]
+ignore = [
+    "PLR0913", "PLR0917",  # the fitness formula and simulation configs naturally take many arguments
+    "PLR2004",  # magic values are fine in a numeric simulator
+    "RUF001", "RUF002", "RUF003",  # intentional unicode (×, –) in UI text
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-statements = 40
+max-branches = 12
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S603", "S607", "PLR0915", "PLC0415"]
+"scripts/**" = ["T201"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["swarmrescue", "app.py", "main.py", "scripts", "tests"]
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["matplotlib.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["swarmrescue"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 90
+
+[tool.bandit]
+exclude_dirs = ["tests", ".devcontainer"]

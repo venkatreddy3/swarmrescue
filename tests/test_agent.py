@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 import pytest
 
 from swarmrescue.agent import (
-    DEADLOCK_TICKS, MODE_BFS, MODE_DEADLOCK, MODE_IDLE, MODE_PHEROMONE, UNKNOWN, PheromoneTrail, Robot,
-    bfs_path, crowding,
+    DEADLOCK_TICKS,
+    MODE_BFS,
+    MODE_DEADLOCK,
+    MODE_IDLE,
+    MODE_PHEROMONE,
+    UNKNOWN,
+    PheromoneTrail,
+    Robot,
+    bfs_path,
+    crowding,
 )
 from swarmrescue.config import SwarmConfig
 from swarmrescue.coordination import RadioLink, perceive_teammates
-from swarmrescue.world import DEBRIS, FREE, neighbors4
+from swarmrescue.world import DEBRIS, FREE, cells_where, neighbors4
 
 
 def reference_distance(passable: np.ndarray, start: tuple[int, int], goal: tuple[int, int]) -> int:
@@ -80,7 +90,7 @@ def test_bfs_returns_true_shortest_path(seed: int) -> None:
     """BFS path length equals an independently computed shortest distance."""
     rng = np.random.default_rng(seed)
     passable = rng.random((9, 9)) > 0.3
-    free = list(zip(*np.nonzero(passable)))
+    free = cells_where(passable)
     start, goal = free[0], free[-1]
     goal_mask = np.zeros_like(passable)
     goal_mask[goal] = True
@@ -92,7 +102,7 @@ def test_bfs_returns_true_shortest_path(seed: int) -> None:
     assert path is not None
     assert len(path) - 1 == expected
     assert path[0] == start and path[-1] == goal
-    for a, b in zip(path, path[1:]):
+    for a, b in itertools.pairwise(path):
         assert abs(a[0] - b[0]) + abs(a[1] - b[1]) == 1
         assert passable[b]
 

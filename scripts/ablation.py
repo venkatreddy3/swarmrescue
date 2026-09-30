@@ -18,15 +18,21 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from swarmrescue.config import SwarmConfig  # noqa: E402
-from swarmrescue.simulation import SimulationResult, evaluate  # noqa: E402
+from swarmrescue.config import SwarmConfig
+from swarmrescue.simulation import SimulationResult, evaluate
 
-VARIANTS: dict[str, dict[str, object]] = {
+VARIANTS: dict[str, dict[str, bool]] = {
     "Attempt 1 baseline (no pings, no evaporation)": {"use_pings": False, "use_evaporation": False},
     "+ evaporation only (rate 0.01)": {"use_pings": False, "use_evaporation": True},
     "+ acoustic pings only (range 4) - default": {"use_pings": True, "use_evaporation": False},
     "+ pings + evaporation (0.01)": {"use_pings": True, "use_evaporation": True},
 }
+
+
+TABLE_HEADER = (
+    "| Variant | Coverage | Survivors | 1st survivor | All survivors found "
+    "| 90% coverage | Energy | Collisions | Fitness |"
+)
 
 
 def all_found_tick(result: SimulationResult) -> int:
@@ -54,7 +60,7 @@ def main() -> None:
     seeds = list(range(1, parser.parse_args().maps + 1))
     for round_no in (1, 2):
         print(f"\nRound {round_no} - mean over seeds {seeds[0]}..{seeds[-1]}\n")
-        print("| Variant | Coverage | Survivors | 1st survivor | All survivors found | 90% coverage | Energy | Collisions | Fitness |")
+        print(TABLE_HEADER)
         print("|---|---|---|---|---|---|---|---|---|")
         for name, flags in VARIANTS.items():
             print(row(name, evaluate(SwarmConfig(**flags), seeds, round_no)))

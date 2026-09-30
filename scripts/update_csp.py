@@ -23,10 +23,18 @@ def csp_hash(block: str) -> str:
     return "'sha256-" + base64.b64encode(hashlib.sha256(block.encode("utf-8")).digest()).decode() + "'"
 
 
+def inline_block(html: str, tag: str) -> str:
+    """Content of the page's single inline ``<tag>`` block."""
+    match = re.search(rf"<{tag}>(.*?)</{tag}>", html, re.S)
+    if match is None:
+        raise ValueError(f"no inline <{tag}> block found")
+    return match.group(1)
+
+
 def build_csp(html: str) -> str:
     """Strict CSP allowing only this page's own inline script and style."""
-    script = re.search(r"<script>(.*?)</script>", html, re.S).group(1)
-    style = re.search(r"<style>(.*?)</style>", html, re.S).group(1)
+    script = inline_block(html, "script")
+    style = inline_block(html, "style")
     return (
         f"default-src 'none'; script-src {csp_hash(script)}; style-src {csp_hash(style)}; "
         "img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"

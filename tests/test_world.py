@@ -7,8 +7,18 @@ import pytest
 
 from swarmrescue.config import SwarmConfig
 from swarmrescue.world import (
-    DEBRIS, FREE, CellType, Debris, DisasterZone, Survivor, bfs_distances, drop_aftershock_debris,
-    generate_disaster_zone, manhattan, reachable,
+    DEBRIS,
+    FREE,
+    CellType,
+    Debris,
+    DisasterZone,
+    Survivor,
+    bfs_distances,
+    cells_where,
+    drop_aftershock_debris,
+    generate_disaster_zone,
+    manhattan,
+    reachable,
 )
 
 
@@ -73,7 +83,7 @@ def test_bfs_distances_on_known_maze() -> None:
 def test_reachable_matches_bfs_and_is_symmetric(zone: DisasterZone) -> None:
     """Reachability is an equivalence relation over free cells."""
     mask = zone.reachable_mask
-    free = list(zip(*np.nonzero(mask)))
+    free = cells_where(mask)
     a, b = free[0], free[-1]
     dist_ab = bfs_distances(zone.grid, [a])[b]
     dist_ba = bfs_distances(zone.grid, [b])[a]

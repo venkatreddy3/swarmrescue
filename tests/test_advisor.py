@@ -6,7 +6,7 @@ import dataclasses
 
 import pytest
 
-from swarmrescue.advisor import SEVERITY_ORDER, advise
+from swarmrescue.advisor import SEVERITY_ORDER, Recommendation, advise
 from swarmrescue.config import SwarmConfig
 from swarmrescue.optimizer import PSOResult
 from swarmrescue.simulation import SimulationResult, simulate
@@ -18,7 +18,7 @@ def good_result() -> SimulationResult:
     return simulate(SwarmConfig(seed=1))
 
 
-def titles(recs: list) -> set[str]:
+def titles(recs: list[Recommendation]) -> set[str]:
     """Set of recommendation titles."""
     return {r.title for r in recs}
 

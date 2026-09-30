@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+from itertools import pairwise
+from typing import Any
+
 import numpy as np
 import pytest
 
 from swarmrescue.config import SwarmConfig
 from swarmrescue.simulation import (
-    MissionControl, SimulationResult, compute_coverage, compute_fitness, simulate,
+    MissionControl,
+    SimulationResult,
+    compute_coverage,
+    compute_fitness,
+    simulate,
 )
 from swarmrescue.world import FREE, WALL, Aftershock
 
@@ -80,9 +87,9 @@ def test_zero_collisions_default_config(round_no: int) -> None:
 def test_robots_never_occupy_walls_or_share_cells(fixture_name: str, request: pytest.FixtureRequest) -> None:
     """In every recorded frame, robots stand on distinct free cells and move <= 1 step."""
     r: SimulationResult = request.getfixturevalue(fixture_name)
-    for prev, frame in zip(r.frames, r.frames[1:]):
+    for prev, frame in pairwise(r.frames):
         assert len(set(frame.positions)) == len(frame.positions)
-        for old, new in zip(prev.positions, frame.positions):
+        for old, new in zip(prev.positions, frame.positions, strict=True):
             assert frame.grid[new] == FREE
             assert abs(old[0] - new[0]) + abs(old[1] - new[1]) <= 1
 
@@ -102,7 +109,7 @@ def test_round2_shift_effects(round2: SimulationResult) -> None:
     new_walls = (after.grid == WALL) & (before.grid == FREE)
     assert int(new_walls.sum()) == cfg.new_walls
     assert before.alive[0] and not after.alive[0]
-    frozen = {f.positions[0] for f in round2.frames[cfg.shift_tick - 1:]}
+    frozen = {f.positions[0] for f in round2.frames[cfg.shift_tick - 1 :]}
     assert len(frozen) == 1
     assert all(f.alive[1:] == (True,) * (cfg.num_agents - 1) for f in round2.frames)
     assert round2.wall_surprises > 0  # robots discovered debris on known routes
@@ -189,7 +196,7 @@ def test_end_message_format_exact() -> None:
         ({"seed": 1}, 2, "robot batteries depleted"),
     ],
 )
-def test_mission_end_reason_is_real(changes: dict, round_no: int, expected: str) -> None:
+def test_mission_end_reason_is_real(changes: dict[str, Any], round_no: int, expected: str) -> None:
     """The reported reason matches what actually stopped the mission."""
     r = simulate(SwarmConfig(**changes), round_no)
     assert r.end_reason == expected
@@ -217,5 +224,7 @@ def test_ablation_script_runs() -> None:
     from pathlib import Path
 
     script = Path(__file__).resolve().parents[1] / "scripts" / "ablation.py"
-    out = subprocess.run([sys.executable, str(script), "--maps", "1"], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(
+        [sys.executable, str(script), "--maps", "1"], capture_output=True, text=True, check=True
+    ).stdout
     assert out.count("| Attempt 1 baseline") == 2 and out.count("| + acoustic pings only") == 2

@@ -17,10 +17,26 @@ def test_cli_round2_runs(capsys: pytest.CaptureFixture[str]) -> None:
 
 def test_cli_tune_prints_convergence_log(capsys: pytest.CaptureFixture[str]) -> None:
     """--tune prints one PSO log line per iteration."""
-    code = main.main([
-        "--tune", "--seeds", "1", "--eval-seeds", "--particles", "2", "--iters", "2",
-        "--grid-size", "10", "--agents", "2", "--survivors", "2", "--max-ticks", "60",
-    ])
+    code = main.main(
+        [
+            "--tune",
+            "--seeds",
+            "1",
+            "--eval-seeds",
+            "--particles",
+            "2",
+            "--iters",
+            "2",
+            "--grid-size",
+            "10",
+            "--agents",
+            "2",
+            "--survivors",
+            "2",
+            "--max-ticks",
+            "60",
+        ]
+    )
     out = capsys.readouterr().out
     assert code == 0
     assert out.count("[PSO] iter") == 3

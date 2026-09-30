@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import re
 import shutil
@@ -12,28 +10,34 @@ from pathlib import Path
 
 import pytest
 
+from scripts.update_csp import csp_hash, inline_block
+
 WEB = Path(__file__).resolve().parents[1] / "web"
 VERCEL_URL = "https://swarmrescue-web.vercel.app/"
 STREAMLIT_URL = "https://swarmrescue.streamlit.app/"
 HTML = (WEB / "index.html").read_text(encoding="utf-8")
-SCRIPT = re.search(r"<script>(.*?)</script>", HTML, re.S).group(1)
-STYLE = re.search(r"<style>(.*?)</style>", HTML, re.S).group(1)
+SCRIPT = inline_block(HTML, "script")
+STYLE = inline_block(HTML, "style")
 
-# Headless harness: stubs the handful of DOM APIs the page uses, then drives
-# the page's own buttons (Step, Aftershock, New disaster zone) many times.
-HARNESS = r"""
+# Headless harness: STUBS fake the handful of DOM APIs the page uses, the page's
+# own script runs unchanged, then DRIVER presses Step / Aftershock / New disaster zone.
+STUBS = r"""
 const els = {};
 function el(id) {
   if (!els[id]) els[id] = { id, value: id === "robots" ? "4" : "12", checked: true, disabled: false,
     textContent: "", attrs: {}, handlers: {}, width: 500, height: 500,
     addEventListener(t, f) { this.handlers[t] = f; }, setAttribute(k, v) { this.attrs[k] = v; },
-    getContext() { return new Proxy({}, { get: (t, k) => (k in t ? t[k] : () => {}), set: (t, k, v) => { t[k] = v; return true; } }); } };
+    getContext() {
+      return new Proxy({}, { get: (t, k) => (k in t ? t[k] : () => {}),
+                             set: (t, k, v) => { t[k] = v; return true; } });
+    } };
   return els[id];
 }
 globalThis.document = { getElementById: el };
 globalThis.window = { matchMedia: () => ({ matches: true }) };
 globalThis.performance = { now: () => 0 };
-eval(SCRIPT);
+"""
+DRIVER = r"""
 const out = [];
 for (let map = 0; map < MAPS; map++) {
   if (map > 0) els.reset.handlers.click();
@@ -50,9 +54,9 @@ console.log(JSON.stringify(out));
 """
 
 
-def csp_hash(block: str) -> str:
-    """CSP source expression for an inline block."""
-    return "'sha256-" + base64.b64encode(hashlib.sha256(block.encode("utf-8")).digest()).decode() + "'"
+def harness(maps: int) -> str:
+    """Node program: DOM stubs + the page's own script + a driver over ``maps`` missions."""
+    return "\n".join((f"const MAPS = {maps};", STUBS, SCRIPT, DRIVER))
 
 
 def test_page_is_tiny_and_self_contained() -> None:
@@ -88,8 +92,13 @@ def test_page_accessibility_features() -> None:
         assert f'for="{control}"' in HTML
     assert ":focus-visible" in STYLE and "prefers-color-scheme:dark" in STYLE
     assert "prefers-reduced-motion" in SCRIPT
-    for colour, words in (("#E69F00", "orange circle"), ("#009E73", "green star"), ("#CC79A7", "purple triangle"),
-                          ("#56B4E9", "sky blue"), ("#D55E00", "vermillion")):
+    for colour, words in (
+        ("#E69F00", "orange circle"),
+        ("#009E73", "green star"),
+        ("#CC79A7", "purple triangle"),
+        ("#56B4E9", "sky blue"),
+        ("#D55E00", "vermillion"),
+    ):
         assert colour in HTML and words in HTML  # Okabe-Ito colour + shape/text, never colour alone
 
 
@@ -122,7 +131,7 @@ def test_vercel_config_has_matching_csp() -> None:
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js not installed")
 def test_js_port_is_collision_free_across_maps() -> None:
     """The in-browser port never collides and keeps coverage in [0, 1], with and without an aftershock."""
-    code = f"const SCRIPT = {json.dumps(SCRIPT)}; const MAPS = 16;\n{HARNESS}"
+    code = harness(16)
     proc = subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=120, check=True)
     runs = json.loads(proc.stdout)
     assert len(runs) == 16
@@ -141,8 +150,10 @@ END_MESSAGE = re.compile(
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js not installed")
 def test_js_port_reports_real_end_reason() -> None:
     """When a mission stops, the status line gives the real reason, tick and metrics."""
-    code = f"const SCRIPT = {json.dumps(SCRIPT)}; const MAPS = 12;\n{HARNESS}"
-    runs = json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=120, check=True).stdout)
+    code = harness(12)
+    runs = json.loads(
+        subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=120, check=True).stdout
+    )
     reasons = set()
     for run in runs:
         m = END_MESSAGE.match(run["status"])
@@ -166,6 +177,11 @@ def test_js_end_reason_wording_matches_python() -> None:
     from swarmrescue.simulation import REASON_COMPLETE
 
     assert f'const COMPLETE = "{REASON_COMPLETE}";' in SCRIPT
-    for phrase in ("robot batteries depleted", "all robots have failed", "time limit of ",
-                   "nothing left to search in their maps", "survivors found, "):
+    for phrase in (
+        "robot batteries depleted",
+        "all robots have failed",
+        "time limit of ",
+        "nothing left to search in their maps",
+        "survivors found, ",
+    ):
         assert phrase in SCRIPT

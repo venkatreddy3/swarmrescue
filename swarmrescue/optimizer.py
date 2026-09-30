@@ -7,8 +7,8 @@ tuned weights generalise instead of over-fitting one map.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Sequence
 
 import numpy as np
 
@@ -68,7 +68,7 @@ class PSOResult:
 
 def _to_params(position: np.ndarray, names: Sequence[str] = PARAM_NAMES) -> dict[str, float]:
     """Convert a particle position vector to a parameter dictionary."""
-    return {name: float(round(v, 6)) for name, v in zip(names, position)}
+    return {name: float(round(v, 6)) for name, v in zip(names, position, strict=True)}
 
 
 def objective(
@@ -82,10 +82,49 @@ def objective(
     return mean_fitness(base_cfg.with_updates(**_to_params(position, names)), tuple(seeds), round_no)
 
 
+class _Swarm:
+    """Particle positions, velocities and personal/global bests for one PSO run."""
+
+    def __init__(self, base_cfg: SwarmConfig, n_particles: int, rng: np.random.Generator) -> None:
+        """Scatter particles uniformly in the bounds; particle 0 sits at ``base_cfg``'s weights."""
+        self.names = search_space(base_cfg)
+        self.low = np.array([TUNABLE_BOUNDS[p][0] for p in self.names])
+        self.high = np.array([TUNABLE_BOUNDS[p][1] for p in self.names])
+        span = self.high - self.low
+        self.vmax = 0.2 * span
+        self.pos = self.low + rng.random((n_particles, len(self.names))) * span
+        self.pos[0] = [float(getattr(base_cfg, p)) for p in self.names]
+        self.vel = (rng.random(self.pos.shape) * 2 - 1) * 0.1 * span
+        self.fit = np.zeros(n_particles)
+        self.pbest, self.pbest_fit = self.pos.copy(), np.full(n_particles, -np.inf)
+        self.gbest, self.gbest_fit = self.pos[0].copy(), -np.inf
+
+    def evaluate(self, fitness: Callable[[np.ndarray], float]) -> None:
+        """Score every particle and update personal and global bests."""
+        self.fit = np.array([fitness(p) for p in self.pos])
+        improved = self.fit > self.pbest_fit
+        self.pbest[improved], self.pbest_fit[improved] = self.pos[improved], self.fit[improved]
+        g = int(np.argmax(self.pbest_fit))
+        if self.pbest_fit[g] > self.gbest_fit:
+            self.gbest, self.gbest_fit = self.pbest[g].copy(), float(self.pbest_fit[g])
+
+    def move(self, rng: np.random.Generator, inertia: float, c1: float, c2: float) -> None:
+        """Standard velocity update, clamped to 20% of the range; positions clipped to bounds."""
+        r1, r2 = rng.random(self.pos.shape), rng.random(self.pos.shape)
+        vel = inertia * self.vel + c1 * r1 * (self.pbest - self.pos) + c2 * r2 * (self.gbest - self.pos)
+        self.vel = np.clip(vel, -self.vmax, self.vmax)
+        self.pos = np.clip(self.pos + self.vel, self.low, self.high)
+
+    def log(self, iteration: int) -> IterationLog:
+        """Convergence record for the current state."""
+        return IterationLog(iteration, self.gbest_fit, float(self.fit.mean()), _to_params(self.gbest, self.names))
+
+
 def run_pso(
     base_cfg: SwarmConfig,
     round_no: int = 1,
     seeds: Sequence[int] = (1, 2, 3),
+    *,
     n_particles: int = 8,
     n_iters: int = 12,
     inertia: float = 0.6,
@@ -121,43 +160,21 @@ def run_pso(
     if n_particles < 1 or n_iters < 0 or not seeds:
         raise ValueError("need n_particles >= 1, n_iters >= 0 and at least one seed")
     rng = np.random.default_rng(rng_seed)
-    names = search_space(base_cfg)
-    low = np.array([TUNABLE_BOUNDS[p][0] for p in names])
-    high = np.array([TUNABLE_BOUNDS[p][1] for p in names])
-    span = high - low
-    vmax = 0.2 * span
+    swarm = _Swarm(base_cfg, n_particles, rng)
 
-    pos = low + rng.random((n_particles, len(names))) * span
-    pos[0] = [float(getattr(base_cfg, p)) for p in names]
-    vel = (rng.random(pos.shape) * 2 - 1) * 0.1 * span
-    fit = np.array([objective(p, base_cfg, seeds, round_no, names) for p in pos])
-    baseline = float(fit[0])
+    def fitness(position: np.ndarray) -> float:
+        """Objective for one particle."""
+        return objective(position, base_cfg, seeds, round_no, swarm.names)
 
-    pbest, pbest_fit = pos.copy(), fit.copy()
-    g = int(np.argmax(pbest_fit))
-    gbest, gbest_fit = pbest[g].copy(), float(pbest_fit[g])
-    history = [IterationLog(0, gbest_fit, float(fit.mean()), _to_params(gbest, names))]
-    if callback:
-        callback(history[-1])
-
+    swarm.evaluate(fitness)
+    baseline = float(swarm.fit[0])
+    history = [swarm.log(0)]
     for it in range(1, n_iters + 1):
-        r1, r2 = rng.random(pos.shape), rng.random(pos.shape)
-        vel = inertia * vel + c1 * r1 * (pbest - pos) + c2 * r2 * (gbest - pos)
-        vel = np.clip(vel, -vmax, vmax)
-        pos = np.clip(pos + vel, low, high)
-        fit = np.array([objective(p, base_cfg, seeds, round_no, names) for p in pos])
-        improved = fit > pbest_fit
-        pbest[improved], pbest_fit[improved] = pos[improved], fit[improved]
-        g = int(np.argmax(pbest_fit))
-        if pbest_fit[g] > gbest_fit:
-            gbest, gbest_fit = pbest[g].copy(), float(pbest_fit[g])
-        history.append(IterationLog(it, gbest_fit, float(fit.mean()), _to_params(gbest, names)))
         if callback:
             callback(history[-1])
-
-    return PSOResult(
-        best_params=_to_params(gbest, names),
-        best_fitness=gbest_fit,
-        baseline_fitness=baseline,
-        history=tuple(history),
-    )
+        swarm.move(rng, inertia, c1, c2)
+        swarm.evaluate(fitness)
+        history.append(swarm.log(it))
+    if callback:
+        callback(history[-1])
+    return PSOResult(_to_params(swarm.gbest, swarm.names), swarm.gbest_fit, baseline, tuple(history))

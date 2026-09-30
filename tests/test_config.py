@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 import pytest
 
@@ -56,7 +57,7 @@ def test_with_updates_returns_validated_copy(default_cfg: SwarmConfig) -> None:
         {"grid_size": 6, "num_agents": 20, "num_survivors": 20},
     ],
 )
-def test_validation_rejects_bad_values(changes: dict) -> None:
+def test_validation_rejects_bad_values(changes: dict[str, Any]) -> None:
     """Every out-of-range or wrongly typed value raises ValueError."""
     with pytest.raises(ValueError):
         SwarmConfig(**changes)
