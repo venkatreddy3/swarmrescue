@@ -196,7 +196,7 @@ def test_end_message_format_exact() -> None:
         ({"seed": 1}, 1, "every reachable cell searched and every survivor found"),
         ({"seed": 1, "battery": 60}, 1, "robot batteries depleted"),
         ({"seed": 1, "max_ticks": 80}, 1, "time limit of 80 ticks reached"),
-        ({"seed": 1}, 2, "robot batteries depleted"),
+        ({"seed": 1, "use_learning": False}, 2, "robot batteries depleted"),
     ],
 )
 def test_mission_end_reason_is_real(changes: dict[str, Any], round_no: int, expected: str) -> None:

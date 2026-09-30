@@ -7,7 +7,7 @@ import pytest
 
 from swarmrescue.config import SwarmConfig
 from swarmrescue.learning import AdaptiveWeightLearner, weight_presets
-from swarmrescue.simulation import MissionControl
+from swarmrescue.simulation import MissionControl, SimulationResult
 
 
 def learner(epsilon: float = 0.0, window: int = 2) -> AdaptiveWeightLearner:
@@ -50,6 +50,11 @@ def test_each_robot_learns_independently() -> None:
     assert all(r.learner is None for r in MissionControl(SwarmConfig(seed=1, use_learning=False)).robots)
 
 
+def efficiency(results: list[SimulationResult]) -> float:
+    """Mean new cells searched per move."""
+    return float(np.mean([r.visited_cells / max(1, r.energy_moves) for r in results]))
+
+
 def test_learning_is_safe_deterministic_and_energy_efficient() -> None:
     """Online learning keeps zero collisions, is reproducible, and does not lower energy efficiency."""
     on = [MissionControl(SwarmConfig(seed=s, use_learning=True), 2).run() for s in (1, 2, 3)]
@@ -57,8 +62,7 @@ def test_learning_is_safe_deterministic_and_energy_efficient() -> None:
     assert all(r.collisions == 0 for r in on)
     again = MissionControl(SwarmConfig(seed=1, use_learning=True), 2).run()
     assert again.fitness == on[0].fitness
-    eff = lambda rs: np.mean([r.visited_cells / max(1, r.energy_moves) for r in rs])  # noqa: E731
-    assert eff(on) >= eff(off)
+    assert efficiency(on) >= efficiency(off)
 
 
 @pytest.mark.parametrize("bad", [{"learning_epsilon": 1.5}, {"learning_window": 0}, {"use_learning": "yes"}])
